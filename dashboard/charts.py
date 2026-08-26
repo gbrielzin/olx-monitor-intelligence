@@ -24,3 +24,26 @@ def grafico_dispersao_hz(df: pd.DataFrame, tipo_monitor: str):
         title=f"{tipo_monitor} — preço x Hz",
     )
     return fig
+
+
+def grafico_tendencia_quedas(df: pd.DataFrame):
+    """Quedas de preço reais ao longo do tempo -- só existe porque o schema
+    novo grava 1 linha por evento de queda, não 1 linha por rodada de
+    coleta. Fica esparso enquanto pouco histórico acumulou; enche sozinho."""
+    if df.empty:
+        return None
+    sub = df.copy()
+    sub["queda_pct"] = (sub["preco_anterior"] - sub["preco"]) / sub["preco_anterior"] * 100
+
+    fig = px.scatter(
+        sub,
+        x="registrado_em",
+        y="queda_pct",
+        color="marca",
+        size="queda_pct",
+        hover_data=["titulo", "preco_anterior", "preco", "condicao", "url"],
+        labels={"registrado_em": "Quando", "queda_pct": "Queda (%)"},
+        title="Quedas de preço reais ao longo do tempo",
+    )
+    fig.update_yaxes(rangemode="tozero")
+    return fig

@@ -101,12 +101,12 @@ def rodar_coleta() -> None:
     )
 
     for ad in novos:
-        av = avaliar(ad.preco, ad.marca, ad.tipo_monitor)
+        av = avaliar(ad.preco, ad.marca, ad.tipo_monitor, ad.condicao, ad.titulo)
         if av and av.eh_oportunidade:
             enviar_telegram(_msg_novo(ad, av))
 
     for ad in quedas:
-        av = avaliar(ad.preco, ad.marca, ad.tipo_monitor)
+        av = avaliar(ad.preco, ad.marca, ad.tipo_monitor, ad.condicao, ad.titulo)
         if av and av.eh_oportunidade:
             _, preco_anterior = resultado.quedas[ad.listing_id]
             novo_minimo = eh_minimo_historico(ad.listing_id, ad.preco)
