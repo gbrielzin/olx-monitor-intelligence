@@ -106,6 +106,22 @@ CREATE TABLE IF NOT EXISTS coletas (
     com_preco INTEGER NOT NULL,
     PRIMARY KEY (coletado_em, plataforma, categoria)
 );
+
+-- Registro manual de compra/revenda -- não é preenchido pelo scraper,
+-- é o usuário anotando o que realmente aconteceu. É o que permite
+-- comparar margem estimada (common/stats.py) com margem real algum dia.
+CREATE TABLE IF NOT EXISTS vendas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    titulo TEXT NOT NULL,
+    categoria TEXT,
+    url TEXT,
+    preco_pago REAL NOT NULL,
+    preco_revenda REAL,
+    comprador TEXT,
+    data_compra TEXT NOT NULL,
+    data_venda TEXT,
+    criado_em TEXT NOT NULL
+);
 """
 
 _COLUNAS_ANUNCIO = (

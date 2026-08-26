@@ -5,6 +5,7 @@ from charts import grafico_dispersao_hz, grafico_tendencia_quedas
 from common.config import settings
 from common.stats import avaliar_preco, margem_e_confiavel, medianas_todos_grupos
 from queries import carregar_ativos, carregar_quedas_precos
+from vendas import carregar_vendas, marcar_como_vendido, registrar_compra
 
 st.set_page_config(page_title="Monitor Gamer + iPhone — Grande Vitória", layout="wide")
 st.title("Inteligência de mercado (OLX-ES)")
@@ -189,13 +190,83 @@ Análise completa, com os números que sustentam essa recomendação:
     )
 
 
+def secao_vendas() -> None:
+    st.subheader("📥 Registrar compra")
+    with st.form("nova_compra", clear_on_submit=True):
+        titulo = st.text_input("O que comprou")
+        c1, c2, c3 = st.columns(3)
+        preco_pago = c1.number_input("Preço pago (R$)", min_value=0.0, step=10.0)
+        categoria_compra = c2.selectbox("Categoria", ["monitor", "iphone", "computador", "outro"])
+        url = c3.text_input("Link do anúncio (opcional)")
+        if st.form_submit_button("Registrar") and titulo and preco_pago >= 1:
+            registrar_compra(titulo, preco_pago, categoria_compra, url or None)
+            st.success(f"Compra registrada: {titulo}")
+            st.rerun()
+
+    df = carregar_vendas()
+    em_aberto = df[df["preco_revenda"].isna()]
+
+    st.subheader(f"📤 Marcar como vendido ({len(em_aberto)} em aberto)")
+    if em_aberto.empty:
+        st.info("Nada em aberto ainda.")
+    else:
+        opcoes = {
+            f"#{r.id} — {r.titulo} (pago R$ {r.preco_pago:.0f})": r.id
+            for r in em_aberto.itertuples()
+        }
+        escolha = st.selectbox("Qual item", list(opcoes.keys()))
+        c1, c2, c3 = st.columns(3)
+        preco_revenda = c1.number_input("Vendido por (R$)", min_value=0.0, step=10.0)
+        comprador = c2.text_input("Comprador (opcional)")
+        if c3.button("Confirmar venda") and preco_revenda >= 1:
+            marcar_como_vendido(opcoes[escolha], preco_revenda, comprador or None)
+            st.success("Venda registrada!")
+            st.rerun()
+
+    st.subheader("📊 Histórico")
+    concluidas = df[df["preco_revenda"].notna()].copy()
+    if concluidas.empty:
+        st.info(
+            "Nenhuma venda concluída ainda — vai aparecer aqui, com a margem real "
+            "comparada à estimada pelo sistema. É a base pra calibrar os parâmetros "
+            "com resultado de verdade, não achismo."
+        )
+        return
+
+    concluidas["margem_real"] = concluidas["preco_revenda"] - concluidas["preco_pago"]
+    concluidas["margem_pct"] = concluidas["margem_real"] / concluidas["preco_pago"] * 100
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Vendas concluídas", len(concluidas))
+    c2.metric("Margem total real", f"R$ {concluidas['margem_real'].sum():.0f}")
+    c3.metric("Margem média", f"{concluidas['margem_pct'].mean():.0f}%")
+    st.dataframe(
+        concluidas[
+            ["titulo", "categoria", "preco_pago", "preco_revenda", "margem_real",
+             "margem_pct", "comprador", "data_compra", "data_venda"]
+        ].sort_values("data_venda", ascending=False),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "titulo": "O que",
+            "categoria": "Categoria",
+            "preco_pago": st.column_config.NumberColumn("Pago", format="R$ %.0f"),
+            "preco_revenda": st.column_config.NumberColumn("Vendido", format="R$ %.0f"),
+            "margem_real": st.column_config.NumberColumn("Margem", format="R$ %.0f"),
+            "margem_pct": st.column_config.NumberColumn("Margem %", format="%.0f%%"),
+            "comprador": "Comprador",
+            "data_compra": "Comprou em",
+            "data_venda": "Vendeu em",
+        },
+    )
+
+
 categoria_label = st.radio("Categoria", ["Monitor", "iPhone", "Computador", "Todas"], horizontal=True)
 categoria = {"Monitor": "monitor", "iPhone": "iphone", "Computador": "computador", "Todas": None}[categoria_label]
 
 secao_kpis(categoria)
 
-tab_oportunidades, tab_tendencia, tab_mercado, tab_sobre = st.tabs(
-    ["🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "ℹ️ Sobre o negócio"]
+tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas, tab_sobre = st.tabs(
+    ["🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas", "ℹ️ Sobre o negócio"]
 )
 with tab_oportunidades:
     secao_alertas(categoria)
@@ -203,5 +274,7 @@ with tab_tendencia:
     secao_tendencia(categoria)
 with tab_mercado:
     secao_mercado(categoria)
+with tab_vendas:
+    secao_vendas()
 with tab_sobre:
     secao_sobre()
