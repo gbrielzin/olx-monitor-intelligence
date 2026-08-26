@@ -1,0 +1,38 @@
+# Segredos -- nunca commitar
+.env
+
+# Banco de dados local (SQLite + sidecars do modo WAL)
+# data/* em vez de data/ para manter o .gitkeep versionado --
+# sem ele, o volume do Docker pode criar a pasta como root e dar
+# problema de permissão na primeira subida.
+data/*
+!data/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Testes
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Docker
+docker-compose.override.yml
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

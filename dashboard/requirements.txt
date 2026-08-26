@@ -1,0 +1,5 @@
+streamlit==1.40.0
+plotly==5.24.1
+pandas==2.2.3
+pydantic==2.9.2
+pydantic-settings==2.6.1

@@ -1,0 +1,26 @@
+import pandas as pd
+import plotly.express as px
+
+
+def grafico_dispersao_hz(df: pd.DataFrame, tipo_monitor: str):
+    sub = df[
+        (df["tipo_monitor"] == tipo_monitor) & df["hz_exato"].notna() & df["preco"].notna()
+    ].copy()
+    if sub.empty:
+        return None
+
+    mediana = sub["preco"].median()
+    sub["desvio"] = (sub["preco"] - mediana) / mediana
+
+    fig = px.scatter(
+        sub,
+        x="hz_exato",
+        y="preco",
+        color="desvio",
+        color_continuous_scale=["green", "lightgray", "red"],
+        range_color=[-0.4, 0.4],
+        hover_data=["titulo", "marca", "municipio", "url"],
+        labels={"hz_exato": "Taxa de atualização (Hz)", "preco": "Preço (R$)"},
+        title=f"{tipo_monitor} — preço x Hz",
+    )
+    return fig
