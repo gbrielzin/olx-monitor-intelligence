@@ -24,7 +24,12 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
 
     # --- Alvo da coleta ---
+    # Nome ficou de quando só existia uma categoria -- é a busca de
+    # monitor, especificamente (ver iphone_search_url abaixo). Não
+    # renomeado pra não quebrar quem já tem OLX_SEARCH_URL customizado
+    # no .env.
     olx_search_url: str = "https://www.olx.com.br/informatica/monitores/estado-es?q=monitor"
+    iphone_search_url: str = "https://www.olx.com.br/estado-es?q=iphone"
     scrape_interval_minutes: int = 12
     max_paginas: int = 5  # teto por rodada; o loop já para sozinho se a página vier com <50 itens reais
     user_agent: str = (

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from common.config import settings
-from common.schema import MonitorAd
+from common.schema import IphoneAd, MonitorAd
 
 
 def _reload_storage(tmp_path, nome: str):
@@ -23,6 +23,21 @@ def _ad(listing_id: int, coletado_em: datetime, preco: float = 100.0, url: str |
             "preco": preco,
             "marca": "AOC",
             "tipo_monitor": "Monitor Gamer",
+            "coletado_em": coletado_em,
+        }
+    )
+
+
+def _ad_iphone(listing_id: int, coletado_em: datetime, preco: float = 1000.0):
+    return IphoneAd.model_validate(
+        {
+            "listing_id": listing_id,
+            "titulo": f"iphone {listing_id}",
+            "url": f"https://x/iphone-{listing_id}",
+            "data_publicacao": "2026-01-01T00:00:00",
+            "preco": preco,
+            "modelo": "IPHONE 13",
+            "armazenamento_gb": 128,
             "coletado_em": coletado_em,
         }
     )
@@ -289,3 +304,140 @@ def test_eh_minimo_historico_false_quando_ja_esteve_mais_barato(tmp_path):
     assert storage.eh_minimo_historico(1, 900.0) is False
     assert storage.eh_minimo_historico(1, 800.0) is True
     assert storage.eh_minimo_historico(1, 700.0) is True  # abaixo de tudo que já existiu
+
+
+def test_upsert_grava_categoria_e_grupo_de_iphone(tmp_path):
+    storage = _reload_storage(tmp_path, "teste_iphone1.db")
+    storage.init_db()
+    storage.upsert_ads([_ad_iphone(1, datetime.now(timezone.utc))])
+
+    with storage.get_connection() as conn:
+        categoria, grupo, modelo, armazenamento = conn.execute(
+            "SELECT categoria, grupo, modelo, armazenamento_gb FROM anuncios WHERE listing_id = 1"
+        ).fetchone()
+    assert categoria == "iphone"
+    assert grupo == "IPHONE 13 · 128GB"
+    assert modelo == "IPHONE 13"
+    assert armazenamento == 128
+
+
+def test_coleta_de_uma_categoria_nao_desativa_a_outra(tmp_path):
+    """O bug que essa arquitetura precisa evitar: rodar a coleta de iPhone
+    não pode marcar monitor como 'sumido' só porque nenhum monitor veio
+    na lista de anúncios de iPhone daquela rodada -- e vice-versa."""
+    storage = _reload_storage(tmp_path, "teste_isolamento.db")
+    storage.init_db()
+
+    c1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    c2 = datetime(2026, 1, 1, 12, 12, tzinfo=timezone.utc)
+    c3 = datetime(2026, 1, 1, 12, 24, tzinfo=timezone.utc)
+    storage.upsert_ads([_ad(1, c1), _ad(2, c1)])  # 2 monitores ativos
+    storage.upsert_ads([_ad_iphone(101, c2)])  # rodada de iPhone, sem nenhum monitor
+
+    with storage.get_connection() as conn:
+        ativo_monitor_1 = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 1").fetchone()[0]
+        ativo_monitor_2 = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 2").fetchone()[0]
+        ativo_iphone = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 101").fetchone()[0]
+
+    assert ativo_monitor_1 == 1  # não pode ter sido marcado como sumido
+    assert ativo_monitor_2 == 1
+    assert ativo_iphone == 1
+
+    # e o inverso: uma rodada de monitor sem esse iPhone não pode desativá-lo
+    storage.upsert_ads([_ad(1, c3), _ad(2, c3)])
+    with storage.get_connection() as conn:
+        ainda_ativo_iphone = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 101").fetchone()[0]
+    assert ainda_ativo_iphone == 1
+
+
+def test_mediana_de_uma_categoria_nao_mistura_com_a_outra(tmp_path):
+    storage = _reload_storage(tmp_path, "teste_isolamento2.db")
+    storage.init_db()
+    agora = datetime.now(timezone.utc)
+
+    monitores = [_ad(i, agora, preco=p) for i, p in enumerate([100, 200, 300, 400, 500], start=1)]
+    iphones = [_ad_iphone(i, agora, preco=p) for i, p in enumerate([2000, 2100, 2200, 2300, 2400], start=101)]
+    storage.upsert_ads(monitores)
+    storage.upsert_ads(iphones)
+
+    from common.stats import medianas_todos_grupos
+    medianas = medianas_todos_grupos()
+    assert medianas[("monitor", "AOC · Monitor Gamer")] == 300.0
+    assert medianas[("iphone", "IPHONE 13 · 128GB")] == 2200.0
+
+
+def test_contagem_media_ultimas_coletas_separa_por_categoria(tmp_path):
+    storage = _reload_storage(tmp_path, "teste_contagem_categoria.db")
+    storage.init_db()
+    c1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    c2 = datetime(2026, 1, 1, 12, 12, tzinfo=timezone.utc)
+
+    storage.upsert_ads([_ad(i, c1) for i in range(1, 4)])  # 3 monitores
+    storage.upsert_ads([_ad_iphone(i, c1) for i in range(101, 111)])  # 10 iphones
+    storage.upsert_ads([_ad(i, c2) for i in range(1, 4)])
+    storage.upsert_ads([_ad_iphone(i, c2) for i in range(101, 111)])
+
+    assert storage.contagem_media_ultimas_coletas(categoria="monitor") == 3.0
+    assert storage.contagem_media_ultimas_coletas(categoria="iphone") == 10.0
+
+
+def test_migracao_adiciona_categoria_e_grupo_em_banco_pre_multi_categoria(tmp_path):
+    """Simula o estado real do banco em produção: já no schema '1 linha
+    por anúncio' (migração anterior já rodou) mas de antes de existir
+    categoria/grupo -- só monitor. init_db() precisa adicionar as colunas
+    sozinho, sem apagar nada."""
+    storage = _reload_storage(tmp_path, "teste_migracao_categoria.db")
+    agora = datetime.now(timezone.utc)
+    storage.init_db()
+    storage.upsert_ads([_ad(1, agora, preco=500.0), _ad(2, agora, preco=700.0)])
+
+    # simula "banco de antes de categoria existir": remove as colunas
+    # recriando a tabela do jeito antigo e copiando os dados de volta.
+    with storage.get_connection() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE anuncios_sem_categoria (
+                listing_id INTEGER NOT NULL,
+                plataforma TEXT NOT NULL DEFAULT 'olx',
+                titulo TEXT NOT NULL,
+                preco REAL,
+                preco_antigo REAL,
+                url TEXT NOT NULL,
+                data_publicacao TEXT NOT NULL,
+                municipio TEXT, bairro TEXT, marca TEXT, condicao TEXT,
+                polegadas TEXT, resolucao_max TEXT, faixa_hz TEXT, hz_exato INTEGER,
+                tipo_tela TEXT, tipo_monitor TEXT, curvo INTEGER NOT NULL DEFAULT 0,
+                vendedor_nome TEXT, vendedor_nota REAL,
+                primeiro_visto_em TEXT NOT NULL, ultimo_visto_em TEXT NOT NULL,
+                ativo INTEGER NOT NULL DEFAULT 1, removido_em TEXT,
+                PRIMARY KEY (listing_id, plataforma)
+            );
+            INSERT INTO anuncios_sem_categoria
+                (listing_id, plataforma, titulo, preco, preco_antigo, url, data_publicacao,
+                 municipio, bairro, marca, condicao, polegadas, resolucao_max, faixa_hz,
+                 hz_exato, tipo_tela, tipo_monitor, curvo, vendedor_nome, vendedor_nota,
+                 primeiro_visto_em, ultimo_visto_em, ativo, removido_em)
+            SELECT listing_id, plataforma, titulo, preco, preco_antigo, url, data_publicacao,
+                   municipio, bairro, marca, condicao, polegadas, resolucao_max, faixa_hz,
+                   hz_exato, tipo_tela, tipo_monitor, curvo, vendedor_nome, vendedor_nota,
+                   primeiro_visto_em, ultimo_visto_em, ativo, removido_em
+            FROM anuncios;
+            DROP TABLE anuncios;
+            ALTER TABLE anuncios_sem_categoria RENAME TO anuncios;
+            """
+        )
+
+    storage.init_db()  # dispara _adiciona_multi_categoria_se_necessario
+
+    with storage.get_connection() as conn:
+        linha_1 = conn.execute(
+            "SELECT categoria, grupo, preco FROM anuncios WHERE listing_id = 1"
+        ).fetchone()
+
+    assert linha_1 == ("monitor", "AOC · Monitor Gamer", 500.0)
+
+    # idempotência
+    storage.init_db()
+    with storage.get_connection() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM anuncios").fetchone()[0]
+    assert total == 2

@@ -1,9 +1,12 @@
 """Camada estatística e de economia da oportunidade.
 
-Decide se um anúncio é oportunidade comparando o preço com a MEDIANA
-de mercado do mesmo agrupamento (marca + tipo de monitor) — mediana, não
-média, porque é mais robusta a um anúncio de brincadeira por R$1 ou um
-outlier de loja profissional inflando o grupo.
+Decide se um anúncio é oportunidade comparando o preço com a MEDIANA de
+mercado do mesmo (categoria, grupo) — mediana, não média, porque é mais
+robusta a um anúncio de brincadeira por R$1 ou um outlier de loja
+profissional inflando o grupo. `grupo` é calculado por cada schema (ver
+common/schema.py: marca+tipo pra monitor, modelo+armazenamento pra
+iPhone) — esta camada não precisa saber o que compõe cada grupo, só que
+dois anúncios do mesmo grupo competem pela mesma mediana.
 
 A mediana é calculada sobre `anuncios` (1 linha por anúncio *ainda
 ativo*), não sobre um histórico bruto — cada anúncio pesa exatamente 1
@@ -19,7 +22,9 @@ usa DOIS sinais pra decidir isso, não um: o campo estruturado `condicao`
 bastava — visto ao vivo, testando o dashboard: título "COM DEFEITO NÃO
 LIGA" com `condicao` estruturada = "Usado - Excelente" (o vendedor não
 marcou certo no formulário da OLX). Sem o segundo sinal, esse anúncio
-continuava aparecendo como a "melhor oportunidade" do catálogo.
+continuava aparecendo como a "melhor oportunidade" do catálogo. Vale pra
+qualquer categoria: iPhone usa exatamente o mesmo vocabulário de condição
+da OLX que monitor usa.
 
 O preço anunciado não é o preço final — na OLX, negociar (\"chorar\"
 por desconto) faz parte do fluxo normal de compra. `avaliar()` por isso
@@ -46,9 +51,10 @@ from common.storage import get_connection
 
 _CONDICAO_SUCATA = "Com defeito ou avarias"
 
-# Frases comuns em título de anúncio de monitor quebrado/pra peça na OLX --
-# pega o caso em que o vendedor não marcou "com defeito" no campo
-# estruturado mas descreveu o problema no título de qualquer jeito.
+# Frases comuns em título de anúncio quebrado/pra peça na OLX -- pega o
+# caso em que o vendedor não marcou "com defeito" no campo estruturado
+# mas descreveu o problema no título de qualquer jeito. Vocabulário
+# genérico o bastante (não fala em "tela") pra servir monitor e iPhone.
 _TITULO_DEFEITO_PATTERN = re.compile(
     r"n[ãa]o\s+liga|n[ãa]o\s+funciona|com\s+defeito|quebrad[oa]|trincad[oa]|"
     r"pra\s+pe[çc]a|para\s+pe[çc]as?|\bsucata\b|sem\s+imagem|avariad[oa]",
@@ -69,14 +75,14 @@ def margem_e_confiavel(condicao: str | None, titulo: str = "") -> bool:
     return True
 
 
-def preco_mediano_grupo(marca: str | None, tipo_monitor: str | None) -> float | None:
+def preco_mediano_grupo(categoria: str, grupo: str) -> float | None:
     with get_connection() as conn:
         cursor = conn.execute(
             """
             SELECT preco, condicao, titulo FROM anuncios
-            WHERE marca IS ? AND tipo_monitor IS ? AND preco IS NOT NULL AND ativo = 1
+            WHERE categoria = ? AND grupo = ? AND preco IS NOT NULL AND ativo = 1
             """,
-            (marca, tipo_monitor),
+            (categoria, grupo),
         )
         linhas = cursor.fetchall()
     precos = [preco for preco, condicao, titulo in linhas if margem_e_confiavel(condicao, titulo)]
@@ -85,23 +91,31 @@ def preco_mediano_grupo(marca: str | None, tipo_monitor: str | None) -> float | 
     return statistics.median(precos)
 
 
-def medianas_todos_grupos() -> dict[tuple[str | None, str | None], float]:
-    """Mediana de preço de TODOS os grupos (marca, tipo_monitor) de uma vez
-    só, numa única consulta — usado pelo dashboard pra avaliar ~250+ linhas
-    sem abrir uma conexão SQLite nova por linha a cada refresh de 60s
-    (era exatamente isso que `eh_oportunidade` fazia antes, chamada dentro
-    de um `df.apply`)."""
+def medianas_todos_grupos(categoria: str | None = None) -> dict[tuple[str, str], float]:
+    """Mediana de preço de TODOS os grupos de uma vez só, numa única
+    consulta — usado pelo dashboard pra avaliar centenas de linhas sem
+    abrir uma conexão SQLite nova por linha a cada refresh de 60s (era
+    exatamente isso que a versão antiga fazia, chamada dentro de um
+    `df.apply`). Chave do dict: (categoria, grupo). Sem `categoria`,
+    calcula pra todas de uma vez (monitor e iPhone juntos)."""
     with get_connection() as conn:
-        cursor = conn.execute(
-            "SELECT marca, tipo_monitor, preco, condicao, titulo FROM anuncios "
-            "WHERE ativo = 1 AND preco IS NOT NULL"
-        )
+        if categoria is None:
+            cursor = conn.execute(
+                "SELECT categoria, grupo, preco, condicao, titulo FROM anuncios "
+                "WHERE ativo = 1 AND preco IS NOT NULL"
+            )
+        else:
+            cursor = conn.execute(
+                "SELECT categoria, grupo, preco, condicao, titulo FROM anuncios "
+                "WHERE ativo = 1 AND preco IS NOT NULL AND categoria = ?",
+                (categoria,),
+            )
         linhas = cursor.fetchall()
-    grupos: dict[tuple[str | None, str | None], list[float]] = {}
-    for marca, tipo, preco, condicao, titulo in linhas:
+    grupos: dict[tuple[str, str], list[float]] = {}
+    for cat, grupo, preco, condicao, titulo in linhas:
         if not margem_e_confiavel(condicao, titulo):
             continue
-        grupos.setdefault((marca, tipo), []).append(preco)
+        grupos.setdefault((cat, grupo), []).append(preco)
     return {
         chave: statistics.median(precos)
         for chave, precos in grupos.items()
@@ -140,8 +154,8 @@ def avaliar_preco(preco: float, mediana: float) -> Avaliacao:
 
 def avaliar(
     preco: float | None,
-    marca: str | None,
-    tipo_monitor: str | None,
+    categoria: str,
+    grupo: str,
     condicao: str | None = None,
     titulo: str = "",
 ) -> Avaliacao | None:
@@ -152,7 +166,7 @@ def avaliar(
     é pequena demais pra confiar na mediana."""
     if preco is None or not margem_e_confiavel(condicao, titulo):
         return None
-    mediana = preco_mediano_grupo(marca, tipo_monitor)
+    mediana = preco_mediano_grupo(categoria, grupo)
     if mediana is None:
         return None
     return avaliar_preco(preco, mediana)

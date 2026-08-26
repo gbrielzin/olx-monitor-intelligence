@@ -1,10 +1,20 @@
-"""Schema para anúncios de monitor extraídos da OLX.
+"""Schema para anúncios extraídos da OLX — monitor e iPhone, hoje.
 
 Baseado na estrutura real de `properties` encontrada no JSON embutido
 (payload RSC do Next.js) das páginas de busca e detalhe da OLX — não em
-regex sobre HTML visual. A única regex que sobrevive aqui é para achar o
-Hz exato no título, porque o campo estruturado `info_monitors_refresh_rate`
-vem como faixa de filtro de busca ("144 Hz ou maior"), não valor exato.
+regex sobre HTML visual. Cada categoria tem seu próprio dicionário de
+`properties` (`info_monitors_*` pra monitor, `electronics_*`/`cellphone_*`
+pra celular) mas o resto do envelope (listId, subject, priceValue, url,
+date, locationDetails, olxPay) é idêntico entre categorias — só o
+dicionário de specs muda, do jeito que o README original já esperava
+("reaproveita quase o parser inteiro, só troca o dicionário de specs").
+
+`categoria` + a property `grupo` são o que deixa `common/stats.py` e
+`common/storage.py` genéricos: toda comparação de "isso é oportunidade"
+agrupa por (categoria, grupo) em vez de conhecer os campos de cada
+categoria — pra monitor, grupo = marca + tipo; pra iPhone, grupo =
+modelo + armazenamento (marca sozinha não discrimina nada, é sempre
+"Apple").
 """
 
 import re
@@ -41,9 +51,22 @@ def _recupera_marca(marca_olx: Optional[str], titulo: str) -> Optional[str]:
     return marca_olx  # mantém None ou "Outros" se nada bateu
 
 
+def _limpa_preco_valor(v):
+    """Converte 'R$ 1.250' -> 1250.0. Preço ausente vira None, nunca 0 — um
+    0 pareceria uma pechincha impossível e contaminaria a mediana usada
+    pela camada de oportunidade. Compartilhado entre MonitorAd e IphoneAd."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    digitos = re.sub(r"[^\d]", "", str(v))
+    return float(digitos) if digitos else None
+
+
 class MonitorAd(BaseModel):
     listing_id: int
     plataforma: str = "olx"
+    categoria: str = "monitor"
     titulo: str
     preco: Optional[float] = None
     preco_antigo: Optional[float] = None
@@ -68,16 +91,14 @@ class MonitorAd(BaseModel):
 
     @field_validator("preco", "preco_antigo", mode="before")
     @classmethod
-    def _limpa_preco(cls, v):
-        """Converte 'R$ 1.250' -> 1250.0. Preço ausente vira None, nunca 0
-        — um 0 pareceria uma pechincha impossível e contaminaria a mediana
-        usada pela camada de oportunidade."""
-        if v is None:
-            return None
-        if isinstance(v, (int, float)):
-            return float(v)
-        digitos = re.sub(r"[^\d]", "", str(v))
-        return float(digitos) if digitos else None
+    def _valida_preco(cls, v):
+        return _limpa_preco_valor(v)
+
+    @property
+    def grupo(self) -> str:
+        """Chave de comparabilidade — dois anúncios só competem pela mesma
+        mediana se tiverem o mesmo grupo. Ver common/stats.py."""
+        return f"{self.marca or '?'} · {self.tipo_monitor or '?'}"
 
     @classmethod
     def from_olx_json(cls, raw: dict) -> "MonitorAd":
@@ -121,6 +142,106 @@ class MonitorAd(BaseModel):
             tipo_tela=props.get("info_monitors_screen_type"),
             tipo_monitor=props.get("info_monitors_type"),
             curvo="Curvo" in features,
+            vendedor_nome=olx_pay.get("transactionalSellerName"),
+            vendedor_nota=olx_pay.get("transactionalSellerRating"),
+        )
+
+
+# "IPHONE 11", "IPHONE 14 PRO MAX", "IPHONE SE 2022", "IPHONE XR"... —
+# cobre a nomenclatura real da Apple sem precisar de uma lista fixa de
+# modelos que ia ficar desatualizada a cada lançamento novo.
+_IPHONE_MODELO_PATTERN = re.compile(
+    r"iphone\s*(se\s*20\d{2}|\d{1,2}\s*(?:pro\s*max|pro|plus|mini)?|xr|xs\s*max|xs|x)\b",
+    re.IGNORECASE,
+)
+
+
+def _normaliza_modelo_iphone(modelo_olx: Optional[str], titulo: str) -> Optional[str]:
+    """`electronics_model` normalmente vem limpo ("IPHONE 13 PRO MAX"), mas
+    visto ao vivo: às vezes vem lixo sem sentido ('2', '25') -- nesse caso
+    cai pro mesmo truque de extrair do título que já existe pra marca/Hz
+    de monitor."""
+    if modelo_olx:
+        limpo = modelo_olx.strip()
+        if len(limpo) >= 4 and not limpo.isdigit():
+            return limpo.upper()
+    match = _IPHONE_MODELO_PATTERN.search(titulo)
+    if match:
+        return f"IPHONE {match.group(1).strip().upper()}"
+    return modelo_olx
+
+
+def _parse_armazenamento(valor: Optional[str]) -> Optional[int]:
+    """'128GB' -> 128. '1TB' -> 1024 (normaliza pra GB, senão 1TB parece
+    "menor" que 512GB numa ordenação numérica)."""
+    if not valor:
+        return None
+    valor_lower = valor.lower()
+    digitos = re.sub(r"[^\d]", "", valor_lower)
+    if not digitos:
+        return None
+    numero = int(digitos)
+    return numero * 1024 if "tb" in valor_lower else numero
+
+
+class IphoneAd(BaseModel):
+    listing_id: int
+    plataforma: str = "olx"
+    categoria: str = "iphone"
+    titulo: str
+    preco: Optional[float] = None
+    preco_antigo: Optional[float] = None
+    url: str
+    data_publicacao: datetime
+    municipio: Optional[str] = None
+    bairro: Optional[str] = None
+    marca: Optional[str] = "Apple"
+    condicao: Optional[str] = None
+    modelo: Optional[str] = None
+    armazenamento_gb: Optional[int] = None
+    cor: Optional[str] = None
+    saude_bateria: Optional[str] = None
+    vendedor_nome: Optional[str] = None
+    vendedor_nota: Optional[float] = None
+    coletado_em: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("preco", "preco_antigo", mode="before")
+    @classmethod
+    def _valida_preco(cls, v):
+        return _limpa_preco_valor(v)
+
+    @property
+    def grupo(self) -> str:
+        modelo = self.modelo or "iPhone (modelo?)"
+        if self.armazenamento_gb:
+            return f"{modelo} · {self.armazenamento_gb}GB"
+        return modelo
+
+    @classmethod
+    def from_olx_json(cls, raw: dict) -> "IphoneAd":
+        """Baseado na estrutura real de `properties` de um anúncio de
+        celular na OLX (categoria 'Celulares e Smartphones', id 3060) —
+        mesmo envelope de monitor, dicionário de specs diferente."""
+        props = {p["name"]: p["value"] for p in raw.get("properties", [])}
+        titulo = raw.get("subject", "")
+        loc = raw.get("locationDetails") or {}
+        olx_pay = raw.get("olxPay") or {}
+
+        return cls(
+            listing_id=raw["listId"],
+            titulo=titulo,
+            preco=raw.get("priceValue"),
+            preco_antigo=raw.get("oldPrice"),
+            url=raw["url"],
+            data_publicacao=datetime.fromtimestamp(raw["date"]),
+            municipio=loc.get("municipality"),
+            bairro=loc.get("neighbourhood"),
+            marca=props.get("electronics_brand") or "Apple",
+            condicao=props.get("electronics_condition"),
+            modelo=_normaliza_modelo_iphone(props.get("electronics_model"), titulo),
+            armazenamento_gb=_parse_armazenamento(props.get("cellphone_storage")),
+            cor=props.get("electronics_color"),
+            saude_bateria=props.get("electronics_battery_health"),
             vendedor_nome=olx_pay.get("transactionalSellerName"),
             vendedor_nota=olx_pay.get("transactionalSellerRating"),
         )

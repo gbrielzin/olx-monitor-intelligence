@@ -37,13 +37,19 @@ def _ad(
     )
 
 
+def _grupo(marca: str = "AOC", tipo: str = "Monitor Gamer") -> str:
+    """Mesmo formato de MonitorAd.grupo -- evita reimplementar a regra
+    duas vezes e o teste quebrar sozinho se o formato mudar."""
+    return f"{marca} · {tipo}"
+
+
 def test_preco_mediano_grupo_none_com_amostra_insuficiente(tmp_path):
     storage = _reload_storage(tmp_path, "t1.db")
     storage.init_db()
     storage.upsert_ads([_ad(1, 100.0), _ad(2, 200.0)])  # só 2, mínimo configurado é 5
 
     from common.stats import preco_mediano_grupo
-    assert preco_mediano_grupo("AOC", "Monitor Gamer") is None
+    assert preco_mediano_grupo("monitor", _grupo()) is None
 
 
 def test_preco_mediano_grupo_calcula_com_amostra_suficiente(tmp_path):
@@ -53,7 +59,7 @@ def test_preco_mediano_grupo_calcula_com_amostra_suficiente(tmp_path):
     storage.upsert_ads([_ad(i, p) for i, p in enumerate(precos, start=1)])
 
     from common.stats import preco_mediano_grupo
-    assert preco_mediano_grupo("AOC", "Monitor Gamer") == 300.0
+    assert preco_mediano_grupo("monitor", _grupo()) == 300.0
 
 
 def test_preco_mediano_grupo_ignora_anuncio_inativo(tmp_path):
@@ -67,7 +73,7 @@ def test_preco_mediano_grupo_ignora_anuncio_inativo(tmp_path):
     storage.upsert_ads([_ad(i, p, coletado_em=coleta_2) for i, p in enumerate(precos[:5], start=1)])
 
     from common.stats import preco_mediano_grupo
-    assert preco_mediano_grupo("AOC", "Monitor Gamer") == 300.0  # não 350 (incluiria o 600 inativo)
+    assert preco_mediano_grupo("monitor", _grupo()) == 300.0  # não 350 (incluiria o 600 inativo)
 
 
 def test_medianas_todos_grupos_calcula_todos_de_uma_vez(tmp_path):
@@ -82,9 +88,19 @@ def test_medianas_todos_grupos_calcula_todos_de_uma_vez(tmp_path):
 
     from common.stats import medianas_todos_grupos
     medianas = medianas_todos_grupos()
-    assert medianas[("AOC", "Monitor Gamer")] == 300.0
-    assert medianas[("LG", "Monitor")] == 800.0
-    assert ("Dell", "Monitor") not in medianas
+    assert medianas[("monitor", _grupo("AOC", "Monitor Gamer"))] == 300.0
+    assert medianas[("monitor", _grupo("LG", "Monitor"))] == 800.0
+    assert ("monitor", _grupo("Dell", "Monitor")) not in medianas
+
+
+def test_medianas_todos_grupos_filtra_por_categoria(tmp_path):
+    storage = _reload_storage(tmp_path, "t4b.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([100, 200, 300, 400, 500], start=1)])
+
+    from common.stats import medianas_todos_grupos
+    assert medianas_todos_grupos(categoria="monitor")
+    assert medianas_todos_grupos(categoria="iphone") == {}
 
 
 def test_avaliar_preco_calcula_custo_e_margem_a_partir_da_negociacao_esperada():
@@ -111,7 +127,7 @@ def test_avaliar_none_sem_preco(tmp_path):
     storage.init_db()
 
     from common.stats import avaliar
-    assert avaliar(None, "AOC", "Monitor Gamer") is None
+    assert avaliar(None, "monitor", _grupo()) is None
 
 
 def test_avaliar_none_com_amostra_insuficiente(tmp_path):
@@ -119,7 +135,7 @@ def test_avaliar_none_com_amostra_insuficiente(tmp_path):
     storage.init_db()
 
     from common.stats import avaliar
-    assert avaliar(500.0, "MarcaQueNaoExiste", "Monitor") is None
+    assert avaliar(500.0, "monitor", _grupo("MarcaQueNaoExiste", "Monitor")) is None
 
 
 def test_avaliar_retorna_avaliacao_completa(tmp_path):
@@ -129,7 +145,7 @@ def test_avaliar_retorna_avaliacao_completa(tmp_path):
     storage.upsert_ads([_ad(i, p) for i, p in enumerate(precos, start=1)])
 
     from common.stats import avaliar
-    av = avaliar(200.0, "AOC", "Monitor Gamer")
+    av = avaliar(200.0, "monitor", _grupo())
     assert av is not None
     assert av.mediana == 300.0
     assert av.preco == 200.0
@@ -165,7 +181,7 @@ def test_preco_mediano_grupo_ignora_anuncio_com_defeito(tmp_path):
     storage.upsert_ads(ads)
 
     from common.stats import preco_mediano_grupo
-    assert preco_mediano_grupo("AOC", "Monitor Gamer") == 500.0  # não conta o 20.0
+    assert preco_mediano_grupo("monitor", _grupo()) == 500.0  # não conta o 20.0
 
 
 def test_medianas_todos_grupos_ignora_anuncio_com_defeito(tmp_path):
@@ -176,7 +192,7 @@ def test_medianas_todos_grupos_ignora_anuncio_com_defeito(tmp_path):
     storage.upsert_ads(ads)
 
     from common.stats import medianas_todos_grupos
-    assert medianas_todos_grupos()[("AOC", "Monitor Gamer")] == 500.0
+    assert medianas_todos_grupos()[("monitor", _grupo())] == 500.0
 
 
 def test_avaliar_none_para_anuncio_com_defeito_mesmo_barato(tmp_path):
@@ -189,9 +205,9 @@ def test_avaliar_none_para_anuncio_com_defeito_mesmo_barato(tmp_path):
     storage.upsert_ads(ads)
 
     from common.stats import avaliar
-    assert avaliar(20.0, "AOC", "Monitor Gamer", condicao="Com defeito ou avarias") is None
+    assert avaliar(20.0, "monitor", _grupo(), condicao="Com defeito ou avarias") is None
     # o mesmo preço, sem ser "com defeito", seria avaliado normalmente
-    av_normal = avaliar(20.0, "AOC", "Monitor Gamer", condicao="Usado - Bom")
+    av_normal = avaliar(20.0, "monitor", _grupo(), condicao="Usado - Bom")
     assert av_normal is not None
     assert av_normal.eh_oportunidade is True
 
@@ -204,7 +220,7 @@ def test_avaliar_none_quando_titulo_denuncia_defeito_apesar_da_condicao_boa(tmp_
 
     from common.stats import avaliar
     resultado = avaliar(
-        20.0, "AOC", "Monitor Gamer",
+        20.0, "monitor", _grupo(),
         condicao="Usado - Excelente", titulo="Monitor AOC 27p COM DEFEITO NÃO LIGA",
     )
     assert resultado is None

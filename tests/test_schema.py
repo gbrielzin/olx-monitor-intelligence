@@ -1,4 +1,4 @@
-from common.schema import MonitorAd
+from common.schema import IphoneAd, MonitorAd
 
 
 def _base(**overrides):
@@ -129,3 +129,76 @@ def test_marca_curta_nao_casa_no_meio_de_outra_palavra():
         "properties": [],
     }
     assert MonitorAd.from_olx_json(raw).marca is None
+
+
+# --- IphoneAd -- estrutura real da OLX (categoria "Celulares e
+# Smartphones", id 3060), inspecionada ao vivo antes de escrever o parser.
+
+def _raw_iphone(**overrides):
+    props = {
+        "electronics_brand": "APPLE",
+        "electronics_model": "IPHONE 11",
+        "electronics_condition": "Usado - Excelente",
+        "cellphone_storage": "128GB",
+        "electronics_color": "Preto",
+        "electronics_battery_health": "Boa (80% até 94%)",
+    }
+    props.update(overrides.pop("props", {}))
+    raw = {
+        "listId": 1529533240,
+        "subject": "Vendo IPhone 11 , ou troco por um 11 pro Max",
+        "priceValue": "R$ 1.200",
+        "oldPrice": None,
+        "url": "https://es.olx.com.br/x-1529533240",
+        "date": 1787313137,
+        "locationDetails": {"municipality": "Cariacica", "neighbourhood": "São Conrado", "uf": "ES"},
+        "olxPay": {"transactionalSellerName": "vitoria", "transactionalSellerRating": None},
+        "properties": [{"name": k, "value": v} for k, v in props.items()],
+    }
+    raw.update(overrides)
+    return raw
+
+
+def test_iphone_from_olx_json_le_specs_reais():
+    ad = IphoneAd.from_olx_json(_raw_iphone())
+    assert ad.categoria == "iphone"
+    assert ad.marca == "APPLE"
+    assert ad.modelo == "IPHONE 11"
+    assert ad.armazenamento_gb == 128
+    assert ad.cor == "Preto"
+    assert ad.condicao == "Usado - Excelente"
+    assert ad.saude_bateria == "Boa (80% até 94%)"
+    assert ad.preco == 1200.0
+    assert ad.municipio == "Cariacica"
+
+
+def test_iphone_grupo_combina_modelo_e_armazenamento():
+    ad = IphoneAd.from_olx_json(_raw_iphone())
+    assert ad.grupo == "IPHONE 11 · 128GB"
+
+
+def test_iphone_armazenamento_em_tb_normaliza_pra_gb():
+    ad = IphoneAd.from_olx_json(_raw_iphone(props={"cellphone_storage": "1TB"}))
+    assert ad.armazenamento_gb == 1024
+
+
+def test_iphone_modelo_invalido_cai_pro_titulo():
+    """Achado nos dados reais: 'electronics_model' às vezes vem lixo tipo
+    '2' ou '25' sem sentido -- nesse caso o título é a fonte confiável."""
+    raw = _raw_iphone(
+        subject="iPhone 13 Pro Max 256GB lacrado",
+        props={"electronics_model": "25"},
+    )
+    ad = IphoneAd.from_olx_json(raw)
+    assert ad.modelo == "IPHONE 13 PRO MAX"
+
+
+def test_iphone_modelo_ausente_extrai_do_titulo():
+    raw = _raw_iphone(subject="iPhone SE 2022 novo lacrado", properties=[])
+    ad = IphoneAd.from_olx_json(raw)
+    assert ad.modelo == "IPHONE SE 2022"
+
+
+def test_iphone_condicao_com_defeito_usa_mesmo_vocabulario_de_monitor():
+    ad = IphoneAd.from_olx_json(_raw_iphone(props={"electronics_condition": "Com defeito ou avarias"}))
+    assert ad.condicao == "Com defeito ou avarias"

@@ -27,6 +27,10 @@ from common.schema import MonitorAd
 
 logger = logging.getLogger(__name__)
 
+# Type[MonitorAd] | Type[IphoneAd] em espírito -- qualquer classe com
+# .from_olx_json(dict) e .coletado_em serve, não precisamos importar
+# IphoneAd aqui só pra anotar o tipo.
+
 
 def _try_unescape(raw: str) -> str:
     if '\\"' not in raw:
@@ -77,24 +81,27 @@ def extract_ads(html: str) -> list[dict]:
     raise ValueError("array 'ads' não fechou corretamente — HTML truncado ou mudou de formato")
 
 
-def build_ads(raw_items: list[dict]) -> list[MonitorAd]:
+def build_ads(raw_items: list[dict], ad_class=MonitorAd) -> list:
     """Valida uma lista de dicts brutos já extraídos — de 1 página ou de
-    N páginas concatenadas, não importa pra esta função.
+    N páginas concatenadas, não importa pra esta função. `ad_class` é
+    MonitorAd por padrão (mantém quem já chamava sem esse argumento
+    funcionando) ou IphoneAd pra coleta de celular — o resto da função
+    não muda entre categorias, só qual `.from_olx_json` é chamado.
 
     Importante: todos os anúncios de uma mesma chamada recebem o MESMO
-    `coletado_em`, gerado uma única vez aqui. Se cada MonitorAd gerasse
+    `coletado_em`, gerado uma única vez aqui. Se cada anúncio gerasse
     seu próprio timestamp (via default_factory, microssegundo a
-    microssegundo), get_last_seen_ids() e as queries do dashboard —
-    que agrupam por coletado_em pra saber 'o que veio nesta rodada' —
+    microssegundo), snapshot_estado() e as queries do dashboard — que
+    agrupam por coletado_em pra saber 'o que veio nesta rodada' —
     quebrariam silenciosamente, pegando só o último anúncio da lista.
     """
     momento_coleta = datetime.now(timezone.utc)
-    ads: list[MonitorAd] = []
+    ads = []
     for item in raw_items:
         if "listId" not in item:
             continue  # placeholder de propaganda misturado no array, nao e anuncio
         try:
-            ad = MonitorAd.from_olx_json(item)
+            ad = ad_class.from_olx_json(item)
             ad.coletado_em = momento_coleta
             ads.append(ad)
         except Exception as e:
@@ -102,7 +109,7 @@ def build_ads(raw_items: list[dict]) -> list[MonitorAd]:
     return ads
 
 
-def parse_ads(html: str) -> list[MonitorAd]:
+def parse_ads(html: str, ad_class=MonitorAd) -> list:
     """Mantido para compatibilidade com quem só tem uma página de HTML
     (e com os testes existentes, que continuam passando sem alteração)."""
-    return build_ads(extract_ads(html))
+    return build_ads(extract_ads(html), ad_class)
