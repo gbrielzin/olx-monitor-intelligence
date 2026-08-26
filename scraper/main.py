@@ -32,7 +32,7 @@ logger = logging.getLogger("scraper")
 def _msg_novo(ad: MonitorAd, av: Avaliacao) -> str:
     return (
         f"💰 *Oportunidade (novo anúncio)* — {ad.titulo}\n"
-        f"Anunciado: R$ {av.preco:.0f} — {ad.municipio or '?'}\n"
+        f"Anunciado: R$ {av.preco:.0f} — {ad.municipio or '?'} — {ad.condicao or 'condição não informada'}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
         f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
         f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%})\n"
@@ -44,7 +44,8 @@ def _msg_queda(ad: MonitorAd, av: Avaliacao, preco_anterior: float, novo_minimo:
     estrela = " 🔻 mínimo histórico" if novo_minimo else ""
     return (
         f"📉 *Baixou de preço e virou oportunidade* — {ad.titulo}\n"
-        f"R$ {preco_anterior:.0f} → R$ {av.preco:.0f}{estrela} — {ad.municipio or '?'}\n"
+        f"R$ {preco_anterior:.0f} → R$ {av.preco:.0f}{estrela} — {ad.municipio or '?'} — "
+        f"{ad.condicao or 'condição não informada'}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
         f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
         f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%})\n"
