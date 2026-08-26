@@ -76,7 +76,7 @@ def secao_alertas(categoria: str | None) -> None:
     st.dataframe(
         oportunidades[
             ["categoria", "titulo", "preco", "apos_negociar", "margem_rs", "margem_pct",
-             "condicao", "marca", "municipio", "url"]
+             "condicao", "saude_bateria", "marca", "municipio", "url"]
         ].sort_values("margem_pct", ascending=False),
         use_container_width=True,
         hide_index=True,
@@ -88,6 +88,7 @@ def secao_alertas(categoria: str | None) -> None:
             "margem_rs": st.column_config.NumberColumn("Margem", format="R$ %.0f"),
             "margem_pct": st.column_config.NumberColumn("Margem %", format="%.0f%%"),
             "condicao": "Condição",
+            "saude_bateria": "Bateria",
             "marca": "Marca",
             "municipio": "Município",
             "url": st.column_config.LinkColumn("Link", display_text="abrir"),

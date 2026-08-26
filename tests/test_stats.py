@@ -170,6 +170,24 @@ def test_margem_e_confiavel_pelo_titulo_quando_condicao_esta_errada():
     assert margem_e_confiavel("Usado - Excelente", "Monitor Samsung 24 polegadas") is True
 
 
+def test_margem_e_confiavel_cobre_termos_de_iphone():
+    """Achado ao vivo (2ª vez): um iPhone com defeito passou pelo primeiro
+    regex e chegou no Telegram -- o vocabulário de defeito de celular é
+    mais amplo que o de monitor (bateria, iCloud) e não estava coberto."""
+    from common.stats import margem_e_confiavel
+
+    assert margem_e_confiavel("Usado - Bom", "iPhone 11 com problema na tela") is False
+    assert margem_e_confiavel("Usado - Bom", "iPhone 12 não carrega mais") is False
+    assert margem_e_confiavel("Usado - Bom", "iPhone 13 bateria viciada, troca") is False
+    assert margem_e_confiavel("Usado - Excelente", "iPhone 11 iCloud bloqueado") is False
+    assert margem_e_confiavel("Usado - Bom", "iPhone XR preso no iCloud, vendo assim mesmo") is False
+    assert margem_e_confiavel("Usado - Bom", "iPhone 14 rachado no canto") is False
+    # "desbloqueado" é sinal bom (aparelho livre), não pode casar com o
+    # regex de "bloqueado" por conter a palavra como substring.
+    assert margem_e_confiavel("Usado - Excelente", "iPhone 13 128gb desbloqueado de fábrica") is True
+    assert margem_e_confiavel("Usado - Excelente", "iPhone 12 sem iCloud, zerado") is True
+
+
 def test_preco_mediano_grupo_ignora_anuncio_com_defeito(tmp_path):
     """Um anúncio 'com defeito ou avarias' é mercado de sucata, não de
     unidade funcionando -- não pode puxar a mediana pra baixo e fazer

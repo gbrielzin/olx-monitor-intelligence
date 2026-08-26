@@ -32,10 +32,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("scraper")
 
 
+def _linha_bateria(ad) -> str:
+    """Só existe pra iPhone (getattr defensivo -- monitor não tem esse
+    campo). Vem na mensagem porque bateria fraca muda a decisão tanto
+    quanto condição, mas não é forte o bastante pra excluir o anúncio da
+    mediana como 'com defeito' -- é informação, não veto."""
+    saude = getattr(ad, "saude_bateria", None)
+    return f"\nBateria: {saude}" if saude else ""
+
+
 def _msg_novo(ad, av: Avaliacao) -> str:
     return (
         f"💰 *Oportunidade (novo anúncio)* — {ad.titulo}\n"
-        f"Anunciado: R$ {av.preco:.0f} — {ad.municipio or '?'} — {ad.condicao or 'condição não informada'}\n"
+        f"Anunciado: R$ {av.preco:.0f} — {ad.municipio or '?'} — {ad.condicao or 'condição não informada'}"
+        f"{_linha_bateria(ad)}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
         f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
         f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%})\n"
@@ -48,7 +58,8 @@ def _msg_queda(ad, av: Avaliacao, preco_anterior: float, novo_minimo: bool) -> s
     return (
         f"📉 *Baixou de preço e virou oportunidade* — {ad.titulo}\n"
         f"R$ {preco_anterior:.0f} → R$ {av.preco:.0f}{estrela} — {ad.municipio or '?'} — "
-        f"{ad.condicao or 'condição não informada'}\n"
+        f"{ad.condicao or 'condição não informada'}"
+        f"{_linha_bateria(ad)}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
         f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
         f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%})\n"

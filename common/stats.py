@@ -51,13 +51,23 @@ from common.storage import get_connection
 
 _CONDICAO_SUCATA = "Com defeito ou avarias"
 
-# Frases comuns em título de anúncio quebrado/pra peça na OLX -- pega o
-# caso em que o vendedor não marcou "com defeito" no campo estruturado
-# mas descreveu o problema no título de qualquer jeito. Vocabulário
-# genérico o bastante (não fala em "tela") pra servir monitor e iPhone.
+# Frases comuns em título de anúncio quebrado/pra peça/de risco na OLX --
+# pega o caso em que o vendedor não marcou "com defeito" no campo
+# estruturado mas descreveu o problema no título de qualquer jeito.
+# Vocabulário genérico o bastante (não fala em "tela") pra servir monitor
+# e iPhone, mais alguns termos específicos de celular (bateria, iCloud --
+# "(?<!des)bloqueado" pega "bloqueado"/"iCloud bloqueado" sem confundir
+# com "desbloqueado", que é o oposto: bom sinal, não defeito).
+#
+# Isso NUNCA vai cobrir toda frase possível de defeito em português --
+# é uma rede de segurança probabilística, não uma garantia. Ver
+# margem_e_confiavel() pra reportar caso passe um exemplo nesta rede.
 _TITULO_DEFEITO_PATTERN = re.compile(
-    r"n[ãa]o\s+liga|n[ãa]o\s+funciona|com\s+defeito|quebrad[oa]|trincad[oa]|"
-    r"pra\s+pe[çc]a|para\s+pe[çc]as?|\bsucata\b|sem\s+imagem|avariad[oa]",
+    r"n[ãa]o\s+liga|n[ãa]o\s+funciona|n[ãa]o\s+carrega|n[ãa]o\s+desbloqueia|"
+    r"com\s+defeito|com\s+problemas?|problemas?\s+n[ao]|quebrad[oa]|trincad[oa]|rachad[oa]|"
+    r"amassad[oa]|molhad[oa]|pra\s+pe[çc]a|para\s+pe[çc]as?|\bsucata\b|sem\s+imagem|"
+    r"avariad[oa]|bateria\s+(viciada|fraca|ruim)|(?<!des)bloqueado|preso\s+no\s+icloud|"
+    r"icloud\s+(bloqueado|ativ[oa])",
     re.IGNORECASE,
 )
 
