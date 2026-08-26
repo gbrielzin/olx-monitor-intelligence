@@ -1,14 +1,14 @@
 """Entrypoint do serviço de scraper.
 
-Roda duas rodadas em paralelo via APScheduler, cada uma a cada
-`scrape_interval_minutes`: monitor e iPhone. Mesma orquestração pras
-duas (`rodar_coleta`, parametrizada) — só muda a URL de busca e qual
-schema (`MonitorAd`/`IphoneAd`) interpreta o JSON da OLX. Cada rodada
-pode interromper sem afetar a outra nem a próxima (o agendador continua
-rodando mesmo se uma rodada específica falhar) — inclusive gravar no
-banco: um erro ali avisa por Telegram e desiste da rodada, do mesmo
-jeito que fetch/parse/sanidade já faziam, em vez de sumir sem ninguém
-notar:
+Roda três rodadas em paralelo via APScheduler, cada uma a cada
+`scrape_interval_minutes`: monitor, iPhone e computador. Mesma
+orquestração pras três (`rodar_coleta`, parametrizada) — só muda a URL
+de busca e qual schema (`MonitorAd`/`IphoneAd`/`ComputadorAd`) interpreta
+o JSON da OLX. Cada rodada pode interromper sem afetar as outras nem a
+próxima (o agendador continua rodando mesmo se uma rodada específica
+falhar) — inclusive gravar no banco: um erro ali avisa por Telegram e
+desiste da rodada, do mesmo jeito que fetch/parse/sanidade já faziam, em
+vez de sumir sem ninguém notar:
 
     fetch -> parse -> checkpoint de sanidade -> grava -> alertas
 """
@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from common.config import settings
-from common.schema import IphoneAd, MonitorAd
+from common.schema import ComputadorAd, IphoneAd, MonitorAd
 from common.storage import contagem_media_ultimas_coletas, eh_minimo_historico, init_db, upsert_ads
 from diff import separar_novidades
 from fetcher import FetchError, fetch_html, url_pagina
@@ -32,20 +32,24 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("scraper")
 
 
-def _linha_bateria(ad) -> str:
-    """Só existe pra iPhone (getattr defensivo -- monitor não tem esse
-    campo). Vem na mensagem porque bateria fraca muda a decisão tanto
-    quanto condição, mas não é forte o bastante pra excluir o anúncio da
-    mediana como 'com defeito' -- é informação, não veto."""
+def _linha_extra(ad) -> str:
+    """Detalhe específico de categoria que muda a decisão de compra mas
+    não é forte o bastante pra excluir o anúncio da mediana como 'com
+    defeito' -- é informação, não veto. getattr defensivo porque cada
+    campo só existe numa categoria por vez."""
     saude = getattr(ad, "saude_bateria", None)
-    return f"\nBateria: {saude}" if saude else ""
+    if saude:
+        return f"\nBateria: {saude}"
+    if getattr(ad, "inclui_monitor", False):
+        return "\n🖥️ Inclui monitor (marca/tamanho não informados — confira no anúncio)"
+    return ""
 
 
 def _msg_novo(ad, av: Avaliacao) -> str:
     return (
         f"💰 *Oportunidade (novo anúncio)* — {ad.titulo}\n"
         f"Anunciado: R$ {av.preco:.0f} — {ad.municipio or '?'} — {ad.condicao or 'condição não informada'}"
-        f"{_linha_bateria(ad)}\n"
+        f"{_linha_extra(ad)}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
         f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
         f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%})\n"
@@ -59,7 +63,7 @@ def _msg_queda(ad, av: Avaliacao, preco_anterior: float, novo_minimo: bool) -> s
         f"📉 *Baixou de preço e virou oportunidade* — {ad.titulo}\n"
         f"R$ {preco_anterior:.0f} → R$ {av.preco:.0f}{estrela} — {ad.municipio or '?'} — "
         f"{ad.condicao or 'condição não informada'}"
-        f"{_linha_bateria(ad)}\n"
+        f"{_linha_extra(ad)}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
         f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
         f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%})\n"
@@ -138,24 +142,29 @@ def rodar_coleta_iphone() -> None:
     rodar_coleta(nome="iPhone", search_url=settings.iphone_search_url, ad_class=IphoneAd, categoria="iphone")
 
 
+def rodar_coleta_computador() -> None:
+    rodar_coleta(
+        nome="computador", search_url=settings.computador_search_url,
+        ad_class=ComputadorAd, categoria="computador",
+    )
+
+
 def main() -> None:
     init_db()
     logger.info("Banco pronto em %s", settings.db_path)
 
     scheduler = BlockingScheduler(timezone=timezone.utc)
-    scheduler.add_job(
-        rodar_coleta_monitor,
-        "interval",
-        minutes=settings.scrape_interval_minutes,
-        next_run_time=datetime.now(timezone.utc),  # roda uma vez imediatamente
+    for job in (rodar_coleta_monitor, rodar_coleta_iphone, rodar_coleta_computador):
+        scheduler.add_job(
+            job,
+            "interval",
+            minutes=settings.scrape_interval_minutes,
+            next_run_time=datetime.now(timezone.utc),  # roda uma vez imediatamente
+        )
+    logger.info(
+        "Agendador ativo: monitor + iPhone + computador, a cada %d min.",
+        settings.scrape_interval_minutes,
     )
-    scheduler.add_job(
-        rodar_coleta_iphone,
-        "interval",
-        minutes=settings.scrape_interval_minutes,
-        next_run_time=datetime.now(timezone.utc),
-    )
-    logger.info("Agendador ativo: monitor + iPhone, a cada %d min.", settings.scrape_interval_minutes)
     scheduler.start()
 
 

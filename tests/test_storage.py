@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from common.config import settings
-from common.schema import IphoneAd, MonitorAd
+from common.schema import ComputadorAd, IphoneAd, MonitorAd
 
 
 def _reload_storage(tmp_path, nome: str):
@@ -38,6 +38,21 @@ def _ad_iphone(listing_id: int, coletado_em: datetime, preco: float = 1000.0):
             "preco": preco,
             "modelo": "IPHONE 13",
             "armazenamento_gb": 128,
+            "coletado_em": coletado_em,
+        }
+    )
+
+
+def _ad_computador(listing_id: int, coletado_em: datetime, preco: float = 900.0):
+    return ComputadorAd.model_validate(
+        {
+            "listing_id": listing_id,
+            "titulo": f"computador {listing_id}",
+            "url": f"https://x/pc-{listing_id}",
+            "data_publicacao": "2026-01-01T00:00:00",
+            "preco": preco,
+            "cpu_modelo": "Intel Core i5",
+            "ram_gb": 8,
             "coletado_em": coletado_em,
         }
     )
@@ -441,3 +456,48 @@ def test_migracao_adiciona_categoria_e_grupo_em_banco_pre_multi_categoria(tmp_pa
     with storage.get_connection() as conn:
         total = conn.execute("SELECT COUNT(*) FROM anuncios").fetchone()[0]
     assert total == 2
+
+
+def test_upsert_grava_campos_de_computador(tmp_path):
+    storage = _reload_storage(tmp_path, "teste_pc1.db")
+    storage.init_db()
+    storage.upsert_ads([_ad_computador(1, datetime.now(timezone.utc))])
+
+    with storage.get_connection() as conn:
+        categoria, grupo, cpu, ram = conn.execute(
+            "SELECT categoria, grupo, cpu_modelo, ram_gb FROM anuncios WHERE listing_id = 1"
+        ).fetchone()
+    assert categoria == "computador"
+    assert grupo == "Intel Core i5 · 8GB RAM"
+    assert cpu == "Intel Core i5"
+    assert ram == 8
+
+
+def test_tres_categorias_nao_interferem_entre_si(tmp_path):
+    """Extensão do teste de isolamento pra 3 categorias -- cada uma tem
+    que poder rodar sem afetar o 'ativo' das outras duas."""
+    storage = _reload_storage(tmp_path, "teste_isolamento3.db")
+    storage.init_db()
+
+    c1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    c2 = datetime(2026, 1, 1, 12, 12, tzinfo=timezone.utc)
+    c3 = datetime(2026, 1, 1, 12, 24, tzinfo=timezone.utc)
+
+    storage.upsert_ads([_ad(1, c1)])
+    storage.upsert_ads([_ad_iphone(101, c1)])
+    storage.upsert_ads([_ad_computador(201, c1)])
+
+    # rodadas seguintes de cada categoria, sem as outras duas
+    storage.upsert_ads([_ad(1, c2)])
+    storage.upsert_ads([_ad_iphone(101, c2)])
+    storage.upsert_ads([_ad_computador(201, c3)])
+
+    with storage.get_connection() as conn:
+        ativos = {
+            lid: conn.execute("SELECT ativo FROM anuncios WHERE listing_id = ?", (lid,)).fetchone()[0]
+            for lid in (1, 101, 201)
+        }
+    assert ativos == {1: 1, 101: 1, 201: 1}
+
+    from common.stats import medianas_todos_grupos
+    assert set(c for c, g in medianas_todos_grupos(categoria=None).keys()) <= {"monitor", "iphone", "computador"}

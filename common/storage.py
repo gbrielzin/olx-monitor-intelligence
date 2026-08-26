@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS anuncios (
     armazenamento_gb INTEGER,
     cor TEXT,
     saude_bateria TEXT,
+    -- specs de computador (armazenamento_gb acima é reaproveitado pro HD/SSD)
+    cpu_marca TEXT,
+    cpu_modelo TEXT,
+    ram_gb INTEGER,
+    inclui_monitor INTEGER NOT NULL DEFAULT 0,
     vendedor_nome TEXT,
     vendedor_nota REAL,
     primeiro_visto_em TEXT NOT NULL,
@@ -107,6 +112,7 @@ _COLUNAS_ANUNCIO = (
     "listing_id, plataforma, categoria, grupo, titulo, preco, preco_antigo, url, data_publicacao, "
     "municipio, bairro, marca, condicao, polegadas, resolucao_max, faixa_hz, "
     "hz_exato, tipo_tela, tipo_monitor, curvo, modelo, armazenamento_gb, cor, saude_bateria, "
+    "cpu_marca, cpu_modelo, ram_gb, inclui_monitor, "
     "vendedor_nome, vendedor_nota"
 )
 
@@ -128,6 +134,7 @@ def init_db() -> None:
     with get_connection() as conn:
         _migrar_schema_legado_se_necessario(conn)
         _adiciona_multi_categoria_se_necessario(conn)
+        _adiciona_campos_computador_se_necessario(conn)
         conn.executescript(_SCHEMA)
 
 
@@ -234,7 +241,7 @@ def _backfill_de_legado(conn: sqlite3.Connection) -> None:
             listing_id, plataforma, "monitor", grupo, d["titulo"], d["preco"], d["preco_antigo"],
             d["url"], d["data_publicacao"], d["municipio"], d["bairro"], d["marca"], d["condicao"],
             d["polegadas"], d["resolucao_max"], d["faixa_hz"], d["hz_exato"], d["tipo_tela"],
-            d["tipo_monitor"], d["curvo"], None, None, None, None,
+            d["tipo_monitor"], d["curvo"], None, None, None, None, None, None, None, 0,
             d["vendedor_nome"], d["vendedor_nota"],
             d["primeiro_visto_em"], d["ultimo_visto_em"], ativo, removido_em,
         ))
@@ -243,7 +250,7 @@ def _backfill_de_legado(conn: sqlite3.Connection) -> None:
         f"""
         INSERT INTO anuncios (
             {_COLUNAS_ANUNCIO}, primeiro_visto_em, ultimo_visto_em, ativo, removido_em
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         anuncios_rows,
     )
@@ -309,6 +316,28 @@ def _adiciona_multi_categoria_se_necessario(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE coletas ADD COLUMN categoria TEXT NOT NULL DEFAULT 'monitor'")
 
     logger.warning("Suporte a categoria/grupo adicionado — anúncios existentes marcados como 'monitor'.")
+
+
+def _adiciona_campos_computador_se_necessario(conn: sqlite3.Connection) -> None:
+    """Mesmo padrão das duas migrações acima, pra quando computador
+    entrou: adiciona as colunas de CPU/RAM/monitor-incluso que não
+    existiam antes. Idempotente: se `cpu_modelo` já existe, não faz
+    nada."""
+    existe = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='anuncios'"
+    ).fetchone()
+    if existe is None:
+        return
+    colunas = {r[1] for r in conn.execute("PRAGMA table_info(anuncios)").fetchall()}
+    if "cpu_modelo" in colunas:
+        return
+
+    logger.warning("Adicionando colunas de computador em anúncios existentes...")
+    conn.execute("ALTER TABLE anuncios ADD COLUMN cpu_marca TEXT")
+    conn.execute("ALTER TABLE anuncios ADD COLUMN cpu_modelo TEXT")
+    conn.execute("ALTER TABLE anuncios ADD COLUMN ram_gb INTEGER")
+    conn.execute("ALTER TABLE anuncios ADD COLUMN inclui_monitor INTEGER NOT NULL DEFAULT 0")
+    logger.warning("Colunas de computador adicionadas.")
 
 
 @dataclass
@@ -383,6 +412,8 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
             int(getattr(a, "curvo", False)),
             getattr(a, "modelo", None), getattr(a, "armazenamento_gb", None),
             getattr(a, "cor", None), getattr(a, "saude_bateria", None),
+            getattr(a, "cpu_marca", None), getattr(a, "cpu_modelo", None),
+            getattr(a, "ram_gb", None), int(getattr(a, "inclui_monitor", False)),
             a.vendedor_nome, a.vendedor_nota,
             momento, momento,
         ))
@@ -394,7 +425,7 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
             f"""
             INSERT INTO anuncios (
                 {_COLUNAS_ANUNCIO}, primeiro_visto_em, ultimo_visto_em, ativo, removido_em
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NULL)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NULL)
             ON CONFLICT (listing_id, plataforma) DO UPDATE SET
                 categoria=excluded.categoria,
                 grupo=excluded.grupo,
@@ -418,6 +449,10 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
                 armazenamento_gb=excluded.armazenamento_gb,
                 cor=excluded.cor,
                 saude_bateria=excluded.saude_bateria,
+                cpu_marca=excluded.cpu_marca,
+                cpu_modelo=excluded.cpu_modelo,
+                ram_gb=excluded.ram_gb,
+                inclui_monitor=excluded.inclui_monitor,
                 vendedor_nome=excluded.vendedor_nome,
                 vendedor_nota=excluded.vendedor_nota,
                 ultimo_visto_em=excluded.ultimo_visto_em,

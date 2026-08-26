@@ -1,4 +1,4 @@
-from common.schema import IphoneAd, MonitorAd
+from common.schema import ComputadorAd, IphoneAd, MonitorAd
 
 
 def _base(**overrides):
@@ -201,4 +201,72 @@ def test_iphone_modelo_ausente_extrai_do_titulo():
 
 def test_iphone_condicao_com_defeito_usa_mesmo_vocabulario_de_monitor():
     ad = IphoneAd.from_olx_json(_raw_iphone(props={"electronics_condition": "Com defeito ou avarias"}))
+    assert ad.condicao == "Com defeito ou avarias"
+
+
+# --- ComputadorAd -- estrutura real da OLX (categoria "Computadores e
+# Desktops"), inspecionada ao vivo antes de escrever o parser.
+
+def _raw_computador(**overrides):
+    props = {
+        "info_computer_brand": "Dell",
+        "info_computer_condition": "Usado - Excelente",
+        "info_computer_cpu_brand": "Intel",
+        "info_computer_cpu_model": "Intel Core i5",
+        "info_computer_ram_size": "8 GB",
+        "info_computer_storage_size": "256 GB",
+        "info_computer_type": "Computador Completo",
+    }
+    props.update(overrides.pop("props", {}))
+    raw = {
+        "listId": 1528989352,
+        "subject": "Computador completo Dell i5",
+        "priceValue": "R$ 1.399",
+        "oldPrice": None,
+        "url": "https://es.olx.com.br/x-1528989352",
+        "date": 1787313137,
+        "locationDetails": {"municipality": "Vitoria", "neighbourhood": "Centro", "uf": "ES"},
+        "olxPay": {"transactionalSellerName": "loja", "transactionalSellerRating": None},
+        "properties": [{"name": k, "value": v} for k, v in props.items()],
+    }
+    raw.update(overrides)
+    return raw
+
+
+def test_computador_from_olx_json_le_specs_reais():
+    ad = ComputadorAd.from_olx_json(_raw_computador())
+    assert ad.categoria == "computador"
+    assert ad.marca == "Dell"
+    assert ad.condicao == "Usado - Excelente"
+    assert ad.cpu_marca == "Intel"
+    assert ad.cpu_modelo == "Intel Core i5"
+    assert ad.ram_gb == 8
+    assert ad.armazenamento_gb == 256
+    assert ad.preco == 1399.0
+
+
+def test_computador_grupo_combina_cpu_e_ram():
+    ad = ComputadorAd.from_olx_json(_raw_computador())
+    assert ad.grupo == "Intel Core i5 · 8GB RAM"
+
+
+def test_computador_inclui_monitor_pela_caracteristica_estruturada():
+    raw = _raw_computador(props={"info_computer_features": "Inclui acessórios, Inclui monitor, Inclui SSD"})
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.inclui_monitor is True
+
+
+def test_computador_inclui_monitor_pelo_titulo_quando_falta_a_caracteristica():
+    raw = _raw_computador(subject="PC Completo i5 + SSD + Monitor 19\" | Rápido")
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.inclui_monitor is True
+
+
+def test_computador_nao_inclui_monitor_quando_nao_mencionado():
+    ad = ComputadorAd.from_olx_json(_raw_computador())
+    assert ad.inclui_monitor is False
+
+
+def test_computador_condicao_com_defeito_usa_mesmo_vocabulario():
+    ad = ComputadorAd.from_olx_json(_raw_computador(props={"info_computer_condition": "Com defeito ou avarias"}))
     assert ad.condicao == "Com defeito ou avarias"

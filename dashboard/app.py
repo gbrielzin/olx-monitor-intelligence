@@ -76,7 +76,7 @@ def secao_alertas(categoria: str | None) -> None:
     st.dataframe(
         oportunidades[
             ["categoria", "titulo", "preco", "apos_negociar", "margem_rs", "margem_pct",
-             "condicao", "saude_bateria", "marca", "municipio", "url"]
+             "condicao", "saude_bateria", "inclui_monitor", "marca", "municipio", "url"]
         ].sort_values("margem_pct", ascending=False),
         use_container_width=True,
         hide_index=True,
@@ -89,6 +89,7 @@ def secao_alertas(categoria: str | None) -> None:
             "margem_pct": st.column_config.NumberColumn("Margem %", format="%.0f%%"),
             "condicao": "Condição",
             "saude_bateria": "Bateria",
+            "inclui_monitor": "Inclui monitor?",
             "marca": "Marca",
             "municipio": "Município",
             "url": st.column_config.LinkColumn("Link", display_text="abrir"),
@@ -147,19 +148,26 @@ def secao_mercado(categoria: str | None) -> None:
     st.bar_chart(df["municipio"].value_counts())
 
     st.subheader("Marcas/modelos mais frequentes")
-    coluna_agrupamento = "grupo" if categoria == "iphone" else "marca"
+    coluna_agrupamento = "marca" if categoria == "monitor" else "grupo"
     st.bar_chart(df[coluna_agrupamento].value_counts().head(10))
 
 
 def secao_sobre() -> None:
     st.markdown(
         rf"""
-Sistema de arbitragem informacional: monitora anúncios (monitor gamer e
-iPhone, por enquanto) na OLX (Grande Vitória/ES) a cada
-{settings.scrape_interval_minutes} min, calcula a mediana de mercado de
-cada grupo (marca+tipo pra monitor, modelo+armazenamento pra iPhone), e
-avisa quando um anúncio aparece — ou baixa de preço — a
-**{settings.oportunidade_limiar:.0%} da mediana do grupo ou menos**.
+Sistema de arbitragem informacional: monitora anúncios (monitor gamer,
+iPhone e computador completo, por enquanto) na OLX (Grande Vitória/ES) a
+cada {settings.scrape_interval_minutes} min, calcula a mediana de mercado
+de cada grupo (marca+tipo pra monitor, modelo+armazenamento pra iPhone,
+CPU+RAM pra computador), e avisa quando um anúncio aparece — ou baixa de
+preço — a **{settings.oportunidade_limiar:.0%} da mediana do grupo ou
+menos**.
+
+**Sobre "inclui monitor" em computador:** a OLX informa *que* o kit vem
+com monitor, não *qual* (marca/tamanho/Hz não aparecem separados) — então
+o sistema mostra esse sinal, mas não tenta calcular quanto o monitor
+incluso vale sozinho. Julgamento final de "esse kit vale mais desmontado"
+é seu.
 
 **A tese:** parte do mercado de usados é ineficiente — vendedor urgente ou
 desinformado anuncia abaixo do preço justo. Achar isso manualmente, na hora
@@ -181,8 +189,8 @@ Análise completa, com os números que sustentam essa recomendação:
     )
 
 
-categoria_label = st.radio("Categoria", ["Monitor", "iPhone", "Todas"], horizontal=True)
-categoria = {"Monitor": "monitor", "iPhone": "iphone", "Todas": None}[categoria_label]
+categoria_label = st.radio("Categoria", ["Monitor", "iPhone", "Computador", "Todas"], horizontal=True)
+categoria = {"Monitor": "monitor", "iPhone": "iphone", "Computador": "computador", "Todas": None}[categoria_label]
 
 secao_kpis(categoria)
 

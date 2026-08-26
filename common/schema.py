@@ -245,3 +245,75 @@ class IphoneAd(BaseModel):
             vendedor_nome=olx_pay.get("transactionalSellerName"),
             vendedor_nota=olx_pay.get("transactionalSellerRating"),
         )
+
+
+class ComputadorAd(BaseModel):
+    listing_id: int
+    plataforma: str = "olx"
+    categoria: str = "computador"
+    titulo: str
+    preco: Optional[float] = None
+    preco_antigo: Optional[float] = None
+    url: str
+    data_publicacao: datetime
+    municipio: Optional[str] = None
+    bairro: Optional[str] = None
+    marca: Optional[str] = None
+    condicao: Optional[str] = None
+    cpu_marca: Optional[str] = None
+    cpu_modelo: Optional[str] = None
+    ram_gb: Optional[int] = None
+    armazenamento_gb: Optional[int] = None  # reaproveita o mesmo campo de iPhone -- mesmo conceito
+    # True quando a OLX marca "Inclui monitor" nas características, ou o
+    # título menciona monitor -- só um SINAL de que o kit tem monitor
+    # junto, não dá pra saber marca/tamanho/Hz do monitor incluso a
+    # partir daqui, então não entra em nenhuma conta de valor.
+    inclui_monitor: bool = False
+    vendedor_nome: Optional[str] = None
+    vendedor_nota: Optional[float] = None
+    coletado_em: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("preco", "preco_antigo", mode="before")
+    @classmethod
+    def _valida_preco(cls, v):
+        return _limpa_preco_valor(v)
+
+    @property
+    def grupo(self) -> str:
+        """CPU + RAM, não marca -- metade do catálogo vem marca='Outros'
+        (monta avulsa/loja pequena) e o que separa um PC de R$800 de um
+        de R$3000 é a config, não quem montou."""
+        cpu = self.cpu_modelo or "CPU (?)"
+        if self.ram_gb:
+            return f"{cpu} · {self.ram_gb}GB RAM"
+        return cpu
+
+    @classmethod
+    def from_olx_json(cls, raw: dict) -> "ComputadorAd":
+        """Baseado na estrutura real de `properties` de um anúncio de PC
+        completo na OLX (categoria 'Computadores e Desktops')."""
+        props = {p["name"]: p["value"] for p in raw.get("properties", [])}
+        titulo = raw.get("subject", "")
+        loc = raw.get("locationDetails") or {}
+        olx_pay = raw.get("olxPay") or {}
+        features = (props.get("info_computer_features") or "").lower()
+
+        return cls(
+            listing_id=raw["listId"],
+            titulo=titulo,
+            preco=raw.get("priceValue"),
+            preco_antigo=raw.get("oldPrice"),
+            url=raw["url"],
+            data_publicacao=datetime.fromtimestamp(raw["date"]),
+            municipio=loc.get("municipality"),
+            bairro=loc.get("neighbourhood"),
+            marca=props.get("info_computer_brand"),
+            condicao=props.get("info_computer_condition"),
+            cpu_marca=props.get("info_computer_cpu_brand"),
+            cpu_modelo=props.get("info_computer_cpu_model"),
+            ram_gb=_parse_armazenamento(props.get("info_computer_ram_size")),
+            armazenamento_gb=_parse_armazenamento(props.get("info_computer_storage_size")),
+            inclui_monitor="monitor" in features or "monitor" in titulo.lower(),
+            vendedor_nome=olx_pay.get("transactionalSellerName"),
+            vendedor_nota=olx_pay.get("transactionalSellerRating"),
+        )
