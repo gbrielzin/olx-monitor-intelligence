@@ -33,6 +33,12 @@ def grafico_tendencia_quedas(df: pd.DataFrame):
     if df.empty:
         return None
     sub = df.copy()
+    # preco_anterior=0 é real (anúncio "doação"/grátis reaparecendo) mas não
+    # tem % de queda que faça sentido (divisão por zero -> NaN -> plotly
+    # quebra o marker size). Visto ao vivo em 2026-08-27.
+    sub = sub[sub["preco_anterior"] > 0]
+    if sub.empty:
+        return None
     sub["queda_pct"] = (sub["preco_anterior"] - sub["preco"]) / sub["preco_anterior"] * 100
 
     fig = px.scatter(
