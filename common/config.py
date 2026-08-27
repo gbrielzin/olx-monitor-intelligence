@@ -32,7 +32,12 @@ class Settings(BaseSettings):
     iphone_search_url: str = "https://www.olx.com.br/estado-es?q=iphone"
     computador_search_url: str = "https://www.olx.com.br/estado-es?q=computador%20completo"
     scrape_interval_minutes: int = 12
-    max_paginas: int = 5  # teto por rodada; o loop já para sozinho se a página vier com <50 itens reais
+    # 10 = até 500 anúncios/categoria/rodada. Era 5 (250) -- o banco mostrava
+    # a MESMA contagem exata (250) em toda rodada nas 3 categorias, sinal de
+    # que o teto estava cortando antes do loop achar uma página curta de
+    # verdade (a condição de parada natural, logo abaixo). Sem isso, anúncio
+    # empurrado pra fora da janela virava "sumiço" falso -- ver storage.py.
+    max_paginas: int = 10  # o loop já para sozinho se a página vier com <50 itens reais
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"

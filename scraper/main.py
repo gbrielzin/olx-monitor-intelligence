@@ -14,6 +14,7 @@ vez de sumir sem ninguém notar:
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -80,6 +81,8 @@ def rodar_coleta(*, nome: str, search_url: str, ad_class, categoria: str) -> Non
     raw_items: list[dict] = []
     try:
         for pagina in range(1, settings.max_paginas + 1):
+            if pagina > 1:
+                time.sleep(1)  # teto subiu (5->10 paginas); intervalo curto entre elas
             html = fetch_html(url_pagina(search_url, pagina))
             pagina_raw = extract_ads(html)
             reais = [i for i in pagina_raw if "listId" in i]
