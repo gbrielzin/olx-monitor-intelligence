@@ -19,7 +19,7 @@ def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     medianas = medianas_todos_grupos()
     avaliacoes = [
-        avaliar_preco(preco, medianas[(categoria, grupo)])
+        avaliar_preco(preco, medianas[(categoria, grupo)], categoria)
         if pd.notna(preco) and (categoria, grupo) in medianas and margem_e_confiavel(condicao, titulo)
         else None
         for preco, categoria, grupo, condicao, titulo in zip(
@@ -64,15 +64,26 @@ def secao_alertas(categoria: str | None) -> None:
     oportunidades = df[df["oportunidade"]]
     if oportunidades.empty:
         st.info(
-            "Nenhuma oportunidade agora pelo critério do Telegram "
-            "(preço ≤ 75% da mediana do grupo, com histórico suficiente)."
+            f"Nenhuma oportunidade agora pelo critério do Telegram "
+            f"(preço ≤ {settings.oportunidade_limiar:.0%} da mediana do grupo, dentro do "
+            f"orçamento da categoria, com histórico suficiente)."
         )
         return
+
+    if categoria:
+        teto = getattr(settings, f"orcamento_maximo_{categoria}", None)
+        nota_orcamento = (
+            f" Acima de R$ {teto:.0f} não entra aqui, mesmo com margem boa — ajuste em "
+            f"orcamento_maximo_{categoria} (common/config.py)." if teto else ""
+        )
+    else:
+        nota_orcamento = " Cada categoria tem seu próprio teto de orçamento — acima dele não entra aqui, mesmo com margem boa."
 
     st.caption(
         f"Ordenado por margem estimada — preço anunciado já descontado em "
         f"{settings.desconto_negociacao_esperado:.0%} (negociação esperada) contra a "
         f"mediana do grupo. Não é o preço final, é ponto de partida pra negociar."
+        f"{nota_orcamento}"
     )
     st.dataframe(
         oportunidades[

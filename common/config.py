@@ -55,6 +55,17 @@ class Settings(BaseSettings):
     # único número verificável antes de negociar).
     desconto_negociacao_esperado: float = 0.10
 
+    # --- Orçamento máximo por categoria (teto de preço, não de margem) ---
+    # Por mais boa que a margem % pareça, acima disso não vira notificação --
+    # fora da faixa que você realmente compraria. Chutes iniciais a partir
+    # do que você já confirmou: monitor R$300–600 (seção "Veredito" do
+    # relatório), computador R$400–1000 (sua faixa de giro rápido). iPhone
+    # é o chute mais largo dos três, por falta de faixa que você tenha
+    # confirmado -- ajuste aqui se não bater com o que você compraria.
+    orcamento_maximo_monitor: float = 600.0
+    orcamento_maximo_computador: float = 1000.0
+    orcamento_maximo_iphone: float = 2000.0
+
     # --- Banco de dados ---
     db_path: str = "/data/olx_monitor.db"
 

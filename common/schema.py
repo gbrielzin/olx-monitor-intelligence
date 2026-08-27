@@ -51,6 +51,41 @@ def _recupera_marca(marca_olx: Optional[str], titulo: str) -> Optional[str]:
     return marca_olx  # mantém None ou "Outros" se nada bateu
 
 
+# Mesma lógica de _recupera_marca, mas pra CPU: quando o vendedor não
+# preenche o campo estruturado (comum em loja pequena/pessoa física), o
+# título quase sempre cita o processador em texto livre ("PC Gamer
+# Completo i5...", "Ryzen 5 5500..."). Sem isso, todo anúncio sem essa
+# property cai no mesmo grupo genérico "CPU (?)" e corrompe a mediana
+# igual "Outros" corrompia a de monitor -- só que pior, porque aqui a
+# faixa de preço dentro do grupo genérico é enorme (R$450 a R$2000+).
+# "core\s*iN\b" cobre o caso real "Corei3" (sem espaço, sem borda de
+# palavra antes do "i") que \bi3\b sozinho não pega.
+_CPU_CONHECIDOS = (
+    ("Intel Core i9", re.compile(r"\bi9\b|core\s*i9\b", re.IGNORECASE)),
+    ("Intel Core i7", re.compile(r"\bi7\b|core\s*i7\b", re.IGNORECASE)),
+    ("Intel Core i5", re.compile(r"\bi5\b|core\s*i5\b", re.IGNORECASE)),
+    ("Intel Core i3", re.compile(r"\bi3\b|core\s*i3\b", re.IGNORECASE)),
+    ("Intel Core 2 Duo", re.compile(r"core\s*2\s*duo", re.IGNORECASE)),
+    ("Intel Xeon", re.compile(r"\bxeon\b", re.IGNORECASE)),
+    ("Intel Celeron", re.compile(r"\bceleron\b", re.IGNORECASE)),
+    ("Intel Pentium", re.compile(r"\bpentium\b", re.IGNORECASE)),
+    ("AMD Ryzen 9", re.compile(r"ryzen\s*9\b", re.IGNORECASE)),
+    ("AMD Ryzen 7", re.compile(r"ryzen\s*7\b", re.IGNORECASE)),
+    ("AMD Ryzen 5", re.compile(r"ryzen\s*5\b", re.IGNORECASE)),
+    ("AMD Ryzen 3", re.compile(r"ryzen\s*3\b", re.IGNORECASE)),
+    ("AMD Athlon", re.compile(r"\bathlon\b", re.IGNORECASE)),
+)
+
+
+def _recupera_cpu(cpu_olx: Optional[str], titulo: str) -> Optional[str]:
+    if cpu_olx:
+        return cpu_olx
+    for cpu, pattern in _CPU_CONHECIDOS:
+        if pattern.search(titulo):
+            return cpu
+    return cpu_olx  # mantém None se nada bateu
+
+
 def _limpa_preco_valor(v):
     """Converte 'R$ 1.250' -> 1250.0. Preço ausente vira None, nunca 0 — um
     0 pareceria uma pechincha impossível e contaminaria a mediana usada
@@ -310,7 +345,7 @@ class ComputadorAd(BaseModel):
             marca=props.get("info_computer_brand"),
             condicao=props.get("info_computer_condition"),
             cpu_marca=props.get("info_computer_cpu_brand"),
-            cpu_modelo=props.get("info_computer_cpu_model"),
+            cpu_modelo=_recupera_cpu(props.get("info_computer_cpu_model"), titulo),
             ram_gb=_parse_armazenamento(props.get("info_computer_ram_size")),
             armazenamento_gb=_parse_armazenamento(props.get("info_computer_storage_size")),
             inclui_monitor="monitor" in features or "monitor" in titulo.lower(),

@@ -45,6 +45,7 @@ mediana com 2 ou 3 pontos. O README explica isso.
 import re
 import statistics
 from dataclasses import dataclass
+from typing import Optional
 
 from common.config import settings
 from common.storage import get_connection
@@ -143,7 +144,17 @@ class Avaliacao:
     eh_oportunidade: bool
 
 
-def avaliar_preco(preco: float, mediana: float) -> Avaliacao:
+def _dentro_do_orcamento(preco: float, categoria: Optional[str]) -> bool:
+    """Teto de preço por categoria -- margem % boa não importa se o preço
+    em si está fora do que a pessoa compraria. `categoria=None` (chamador
+    que não sabe/não filtra por categoria) não aplica teto nenhum."""
+    if categoria is None:
+        return True
+    teto = getattr(settings, f"orcamento_maximo_{categoria}", None)
+    return teto is None or preco <= teto
+
+
+def avaliar_preco(preco: float, mediana: float, categoria: Optional[str] = None) -> Avaliacao:
     """A matemática de `avaliar()`, isolada pra quem já tem a mediana em
     mãos (o dashboard, que busca todas de uma vez com `medianas_todos_grupos`)
     e não precisa de uma consulta nova por anúncio. Não checa
@@ -152,13 +163,14 @@ def avaliar_preco(preco: float, mediana: float) -> Avaliacao:
     custo = preco * (1 - settings.desconto_negociacao_esperado)
     margem_rs = mediana - custo
     margem_pct = margem_rs / custo if custo > 0 else 0.0
+    dentro_do_limiar = preco <= mediana * settings.oportunidade_limiar
     return Avaliacao(
         preco=preco,
         mediana=mediana,
         custo_apos_negociacao=custo,
         margem_rs=margem_rs,
         margem_pct=margem_pct,
-        eh_oportunidade=preco <= mediana * settings.oportunidade_limiar,
+        eh_oportunidade=dentro_do_limiar and _dentro_do_orcamento(preco, categoria),
     )
 
 
@@ -179,4 +191,4 @@ def avaliar(
     mediana = preco_mediano_grupo(categoria, grupo)
     if mediana is None:
         return None
-    return avaliar_preco(preco, mediana)
+    return avaliar_preco(preco, mediana, categoria)

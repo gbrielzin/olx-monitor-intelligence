@@ -270,3 +270,45 @@ def test_computador_nao_inclui_monitor_quando_nao_mencionado():
 def test_computador_condicao_com_defeito_usa_mesmo_vocabulario():
     ad = ComputadorAd.from_olx_json(_raw_computador(props={"info_computer_condition": "Com defeito ou avarias"}))
     assert ad.condicao == "Com defeito ou avarias"
+
+
+def test_computador_cpu_recuperado_do_titulo_quando_ausente():
+    """Achado nos dados reais: 19/250 anúncios vinham sem
+    info_computer_cpu_model -- todos caindo no mesmo grupo genérico
+    "CPU (?)", misturando um PC de R$450 com um de R$2000+ na mesma
+    mediana. A maioria cita o processador no título."""
+    raw = _raw_computador(
+        subject="PC Gamer Completo i5 + Monitor + Kit Gamer",
+        props={"info_computer_cpu_model": None},
+    )
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.cpu_modelo == "Intel Core i5"
+
+
+def test_computador_cpu_recuperado_mesmo_sem_espaco_no_titulo():
+    """Caso real: 'Intel Corei3 10100F' -- sem espaço entre 'Core' e 'i3',
+    então \\bi3\\b sozinho não bateria."""
+    raw = _raw_computador(
+        subject='PC Gamer Completo Intel Corei3 10100F, 16Gb DDR4, GT 1030 2Gb, SSD 480Gb, Monitor 21,5"',
+        props={"info_computer_cpu_model": None},
+    )
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.cpu_modelo == "Intel Core i3"
+
+
+def test_computador_cpu_ryzen_recuperado_do_titulo():
+    raw = _raw_computador(
+        subject="PC Gamer Completo Ryzen 5 5500 + Monitor 27 Pol. Curvo",
+        props={"info_computer_cpu_model": None},
+    )
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.cpu_modelo == "AMD Ryzen 5"
+
+
+def test_computador_sem_cpu_em_lugar_nenhum_permanece_none():
+    """Título genérico de verdade (achado nos dados reais) -- sem CPU
+    estruturado nem citado, não tem como recuperar. Fica None, cai no
+    grupo "CPU (?)" mesmo -- correto não inventar marca aqui."""
+    raw = _raw_computador(subject="Computador completo", props={"info_computer_cpu_model": None})
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.cpu_modelo is None

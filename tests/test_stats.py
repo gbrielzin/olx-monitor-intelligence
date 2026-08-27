@@ -122,6 +122,63 @@ def test_avaliar_preco_marca_oportunidade_conforme_limiar():
     assert avaliar_preco(preco=mediana * limiar + 1, mediana=mediana).eh_oportunidade is False
 
 
+def test_avaliar_preco_acima_do_orcamento_maximo_nao_e_oportunidade():
+    """'não faz sentido mandar notificação de computador e celular muito
+    caro' -- margem % boa não basta, o preço em si tem que caber no
+    orçamento real da categoria."""
+    from common.stats import avaliar_preco
+
+    av = avaliar_preco(preco=1500.0, mediana=5000.0, categoria="computador")
+    assert av.eh_oportunidade is False
+
+
+def test_avaliar_preco_dentro_do_orcamento_e_oportunidade_normal():
+    from common.stats import avaliar_preco
+
+    av = avaliar_preco(preco=900.0, mediana=5000.0, categoria="computador")
+    assert av.eh_oportunidade is True
+
+
+def test_avaliar_preco_sem_categoria_nao_aplica_orcamento():
+    """Chamador que não informa categoria (ex: uso genérico/teste isolado)
+    não fica travado por um teto que não tem como escolher."""
+    from common.stats import avaliar_preco
+
+    av = avaliar_preco(preco=1_000_000.0, mediana=2_000_000.0, categoria=None)
+    assert av.eh_oportunidade is True
+
+
+def test_avaliar_aplica_orcamento_maximo_ponta_a_ponta(tmp_path):
+    """Mesmo teste acima, mas pelo caminho real do scraper (avaliar(),
+    não avaliar_preco() direto) -- é o que decide se sai notificação."""
+    from common.schema import ComputadorAd
+
+    storage = _reload_storage(tmp_path, "t8.db")
+    storage.init_db()
+    precos = [4000.0, 4200.0, 4400.0, 4600.0, 4800.0]
+    ads = [
+        ComputadorAd.model_validate(
+            {
+                "listing_id": i,
+                "titulo": f"pc {i}",
+                "url": f"https://x/{i}",
+                "data_publicacao": "2026-01-01T00:00:00",
+                "preco": p,
+                "cpu_modelo": "AMD Ryzen 5",
+                "ram_gb": 16,
+            }
+        )
+        for i, p in enumerate(precos, start=1)
+    ]
+    storage.upsert_ads(ads)
+
+    from common.stats import avaliar
+    # bem abaixo da mediana (~4400) mas acima do orçamento de computador (R$1000)
+    av = avaliar(1500.0, "computador", "AMD Ryzen 5 · 16GB RAM")
+    assert av is not None
+    assert av.eh_oportunidade is False
+
+
 def test_avaliar_none_sem_preco(tmp_path):
     storage = _reload_storage(tmp_path, "t5.db")
     storage.init_db()
