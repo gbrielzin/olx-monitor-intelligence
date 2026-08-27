@@ -69,7 +69,24 @@ class Settings(BaseSettings):
     # confirmado -- ajuste aqui se não bater com o que você compraria.
     orcamento_maximo_monitor: float = 600.0
     orcamento_maximo_computador: float = 1000.0
-    orcamento_maximo_iphone: float = 2000.0
+    orcamento_maximo_iphone: float = 1500.0  # era 2000 (chute) -- 1500 confirmado por voce em 2026-08-27
+
+    # --- Piso de preço por categoria (preço bom demais pra ser real) ---
+    # Visto ao vivo em 2026-08-27: "iPhone 11 64GB" por R$10 (11011% de
+    # "margem"), "TROCO POR PC COMPLETO" por R$1 (133233%), monitores a
+    # R$50-100 marcados "Bom"/"Excelente" -- nenhum bate no filtro de texto
+    # (margem_e_confiavel), porque não é sobre defeito no título, é preço
+    # implausível pro que é: golpe, erro de digitação, anúncio "a
+    # combinar"/troca com preço-placeholder, ou item errado (acessório)
+    # caindo na categoria por engano. Abaixo do piso, o anúncio some da
+    # mediana do grupo E de virar notificação -- mas continua salvo em
+    # `anuncios` normalmente, só não conta como dado de mercado confiável.
+    # Valores = mesma faixa já confirmada em orcamento_maximo (monitor:
+    # abaixo de R$300 o relatório já apontava mais risco de defeito;
+    # computador: piso da sua faixa de giro rápido; iphone: seu pedido).
+    orcamento_minimo_monitor: float = 300.0
+    orcamento_minimo_computador: float = 400.0
+    orcamento_minimo_iphone: float = 600.0
 
     # --- Banco de dados ---
     db_path: str = "/data/olx_monitor.db"

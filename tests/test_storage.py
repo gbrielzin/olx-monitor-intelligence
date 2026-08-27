@@ -395,14 +395,14 @@ def test_mediana_de_uma_categoria_nao_mistura_com_a_outra(tmp_path):
     storage.init_db()
     agora = datetime.now(timezone.utc)
 
-    monitores = [_ad(i, agora, preco=p) for i, p in enumerate([100, 200, 300, 400, 500], start=1)]
+    monitores = [_ad(i, agora, preco=p) for i, p in enumerate([300, 400, 500, 600, 700], start=1)]
     iphones = [_ad_iphone(i, agora, preco=p) for i, p in enumerate([2000, 2100, 2200, 2300, 2400], start=101)]
     storage.upsert_ads(monitores)
     storage.upsert_ads(iphones)
 
     from common.stats import medianas_todos_grupos
     medianas = medianas_todos_grupos()
-    assert medianas[("monitor", "AOC · Monitor Gamer")] == 300.0
+    assert medianas[("monitor", "AOC · Monitor Gamer")] == 500.0
     assert medianas[("iphone", "IPHONE 13 · 128GB")] == 2200.0
 
 

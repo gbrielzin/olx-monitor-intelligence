@@ -73,16 +73,33 @@ _TITULO_DEFEITO_PATTERN = re.compile(
 )
 
 
-def margem_e_confiavel(condicao: str | None, titulo: str = "") -> bool:
+def margem_e_confiavel(
+    condicao: str | None,
+    titulo: str = "",
+    preco: float | None = None,
+    categoria: str | None = None,
+) -> bool:
     """False quando o preço não é comparável ao de um anúncio funcionando.
     Mesma regra vale pra decidir quem entra na mediana do grupo e pra
     decidir se UM anúncio específico pode ser avaliado contra ela — os
     dois lados têm que usar o mesmo critério, senão a margem "explode" ao
-    comparar preço de sucata com mediana de unidade funcionando."""
+    comparar preço de sucata com mediana de unidade funcionando.
+
+    `preco`/`categoria` são opcionais (todo call site antigo continua
+    funcionando sem eles) e cobrem um caso que o texto não pega: preço bom
+    demais pra ser real. "iPhone 11 64GB" por R$10, "TROCO POR PC COMPLETO"
+    por R$1 -- nenhum menciona defeito, mas nenhum é dado de mercado
+    confiável (golpe, erro de digitação, "a combinar"/troca com preço-
+    placeholder, item errado na categoria). Ver orcamento_minimo_* em
+    config.py."""
     if condicao == _CONDICAO_SUCATA:
         return False
     if titulo and _TITULO_DEFEITO_PATTERN.search(titulo):
         return False
+    if preco is not None and categoria is not None:
+        piso = getattr(settings, f"orcamento_minimo_{categoria}", None)
+        if piso is not None and preco < piso:
+            return False
     return True
 
 
@@ -96,7 +113,10 @@ def preco_mediano_grupo(categoria: str, grupo: str) -> float | None:
             (categoria, grupo),
         )
         linhas = cursor.fetchall()
-    precos = [preco for preco, condicao, titulo in linhas if margem_e_confiavel(condicao, titulo)]
+    precos = [
+        preco for preco, condicao, titulo in linhas
+        if margem_e_confiavel(condicao, titulo, preco, categoria)
+    ]
     if len(precos) < settings.oportunidade_amostra_minima:
         return None
     return statistics.median(precos)
@@ -124,7 +144,7 @@ def medianas_todos_grupos(categoria: str | None = None) -> dict[tuple[str, str],
         linhas = cursor.fetchall()
     grupos: dict[tuple[str, str], list[float]] = {}
     for cat, grupo, preco, condicao, titulo in linhas:
-        if not margem_e_confiavel(condicao, titulo):
+        if not margem_e_confiavel(condicao, titulo, preco, cat):
             continue
         grupos.setdefault((cat, grupo), []).append(preco)
     return {
@@ -186,7 +206,7 @@ def avaliar(
     é o gargalo que era no dashboard). None quando falta preço, o anúncio
     parece peça/sucata (`margem_e_confiavel`), ou a amostra do grupo ainda
     é pequena demais pra confiar na mediana."""
-    if preco is None or not margem_e_confiavel(condicao, titulo):
+    if preco is None or not margem_e_confiavel(condicao, titulo, preco, categoria):
         return None
     mediana = preco_mediano_grupo(categoria, grupo)
     if mediana is None:

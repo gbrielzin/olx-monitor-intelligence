@@ -55,11 +55,11 @@ def test_preco_mediano_grupo_none_com_amostra_insuficiente(tmp_path):
 def test_preco_mediano_grupo_calcula_com_amostra_suficiente(tmp_path):
     storage = _reload_storage(tmp_path, "t2.db")
     storage.init_db()
-    precos = [100.0, 200.0, 300.0, 400.0, 500.0]
+    precos = [300.0, 400.0, 500.0, 600.0, 700.0]
     storage.upsert_ads([_ad(i, p) for i, p in enumerate(precos, start=1)])
 
     from common.stats import preco_mediano_grupo
-    assert preco_mediano_grupo("monitor", _grupo()) == 300.0
+    assert preco_mediano_grupo("monitor", _grupo()) == 500.0
 
 
 def test_preco_mediano_grupo_ignora_anuncio_inativo(tmp_path):
@@ -67,20 +67,20 @@ def test_preco_mediano_grupo_ignora_anuncio_inativo(tmp_path):
     storage.init_db()
     coleta_1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     coleta_2 = datetime(2026, 1, 1, 12, 12, tzinfo=timezone.utc)
-    precos = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0]
+    precos = [300.0, 400.0, 500.0, 600.0, 700.0, 800.0]
     storage.upsert_ads([_ad(i, p, coletado_em=coleta_1) for i, p in enumerate(precos, start=1)])
-    # rodada seguinte sem o listing 6 (preço 600) -- fica inativo
+    # rodada seguinte sem o listing 6 (preço 800) -- fica inativo
     storage.upsert_ads([_ad(i, p, coletado_em=coleta_2) for i, p in enumerate(precos[:5], start=1)])
 
     from common.stats import preco_mediano_grupo
-    assert preco_mediano_grupo("monitor", _grupo()) == 300.0  # não 350 (incluiria o 600 inativo)
+    assert preco_mediano_grupo("monitor", _grupo()) == 500.0  # não 550 (incluiria o 800 inativo)
 
 
 def test_medianas_todos_grupos_calcula_todos_de_uma_vez(tmp_path):
     storage = _reload_storage(tmp_path, "t4.db")
     storage.init_db()
     ads = (
-        [_ad(i, p, marca="AOC", tipo="Monitor Gamer") for i, p in enumerate([100, 200, 300, 400, 500], start=1)]
+        [_ad(i, p, marca="AOC", tipo="Monitor Gamer") for i, p in enumerate([300, 400, 500, 600, 700], start=1)]
         + [_ad(i, p, marca="LG", tipo="Monitor") for i, p in enumerate([600, 700, 800, 900, 1000], start=101)]
         + [_ad(201, 50.0, marca="Dell", tipo="Monitor")]  # só 1 -- abaixo da amostra mínima
     )
@@ -88,7 +88,7 @@ def test_medianas_todos_grupos_calcula_todos_de_uma_vez(tmp_path):
 
     from common.stats import medianas_todos_grupos
     medianas = medianas_todos_grupos()
-    assert medianas[("monitor", _grupo("AOC", "Monitor Gamer"))] == 300.0
+    assert medianas[("monitor", _grupo("AOC", "Monitor Gamer"))] == 500.0
     assert medianas[("monitor", _grupo("LG", "Monitor"))] == 800.0
     assert ("monitor", _grupo("Dell", "Monitor")) not in medianas
 
@@ -96,7 +96,7 @@ def test_medianas_todos_grupos_calcula_todos_de_uma_vez(tmp_path):
 def test_medianas_todos_grupos_filtra_por_categoria(tmp_path):
     storage = _reload_storage(tmp_path, "t4b.db")
     storage.init_db()
-    storage.upsert_ads([_ad(i, p) for i, p in enumerate([100, 200, 300, 400, 500], start=1)])
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300, 400, 500, 600, 700], start=1)])
 
     from common.stats import medianas_todos_grupos
     assert medianas_todos_grupos(categoria="monitor")
@@ -198,14 +198,14 @@ def test_avaliar_none_com_amostra_insuficiente(tmp_path):
 def test_avaliar_retorna_avaliacao_completa(tmp_path):
     storage = _reload_storage(tmp_path, "t7.db")
     storage.init_db()
-    precos = [100.0, 200.0, 300.0, 400.0, 500.0]
+    precos = [300.0, 400.0, 500.0, 600.0, 700.0]
     storage.upsert_ads([_ad(i, p) for i, p in enumerate(precos, start=1)])
 
     from common.stats import avaliar
-    av = avaliar(200.0, "monitor", _grupo())
+    av = avaliar(400.0, "monitor", _grupo())
     assert av is not None
-    assert av.mediana == 300.0
-    assert av.preco == 200.0
+    assert av.mediana == 500.0
+    assert av.preco == 400.0
 
 
 def test_margem_e_confiavel():
@@ -271,20 +271,98 @@ def test_medianas_todos_grupos_ignora_anuncio_com_defeito(tmp_path):
 
 
 def test_avaliar_none_para_anuncio_com_defeito_mesmo_barato(tmp_path):
-    """Sem esse guard, um anúncio de R$20 'com defeito' contra uma mediana
-    de unidade boa (ex. R$500) vira 'oportunidade' com margem de centenas
-    de % -- exatamente o bug encontrado ao testar o dashboard no navegador."""
+    """Sem esse guard, um anúncio 'com defeito' contra uma mediana de
+    unidade boa (R$500) vira 'oportunidade' -- exatamente o bug encontrado
+    ao testar o dashboard no navegador. R$350 (não algo tipo R$20) pra
+    isolar só a variável 'condição': o mesmo preço já está acima do piso
+    de orçamento mínimo de monitor (R$300, ver test_avaliar_preco_abaixo_
+    do_piso_nao_e_oportunidade), então só a condição explica a diferença
+    de resultado abaixo."""
     storage = _reload_storage(tmp_path, "t10.db")
     storage.init_db()
     ads = [_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)]
     storage.upsert_ads(ads)
 
     from common.stats import avaliar
-    assert avaliar(20.0, "monitor", _grupo(), condicao="Com defeito ou avarias") is None
+    assert avaliar(350.0, "monitor", _grupo(), condicao="Com defeito ou avarias") is None
     # o mesmo preço, sem ser "com defeito", seria avaliado normalmente
-    av_normal = avaliar(20.0, "monitor", _grupo(), condicao="Usado - Bom")
+    av_normal = avaliar(350.0, "monitor", _grupo(), condicao="Usado - Bom")
     assert av_normal is not None
     assert av_normal.eh_oportunidade is True
+
+
+def test_avaliar_preco_abaixo_do_piso_nao_e_oportunidade():
+    """'iPhone 11 64GB' por R$10 (visto ao vivo, 2026-08-27, condição
+    'Usado - Bom' no anúncio real) não bate em nenhuma regra de texto --
+    só o preço em si denuncia que não é dado de mercado confiável."""
+    from common.stats import margem_e_confiavel
+
+    assert margem_e_confiavel("Usado - Bom", "iPhone 11 64 GB", preco=10.0, categoria="iphone") is False
+
+
+def test_margem_e_confiavel_preco_no_piso_ou_acima_e_confiavel():
+    from common.stats import margem_e_confiavel
+
+    assert margem_e_confiavel("Usado - Bom", "iPhone 11 64 GB", preco=600.0, categoria="iphone") is True
+    assert margem_e_confiavel("Usado - Bom", "iPhone 11 64 GB", preco=599.99, categoria="iphone") is False
+
+
+def test_margem_e_confiavel_sem_preco_ou_categoria_nao_aplica_piso():
+    """Compatibilidade com todo call site antigo (2 argumentos só) --
+    preco/categoria são opcionais, sem eles o piso simplesmente não roda."""
+    from common.stats import margem_e_confiavel
+
+    assert margem_e_confiavel("Usado - Bom", "iPhone 11 64 GB") is True
+    assert margem_e_confiavel("Usado - Bom", "iPhone 11 64 GB", preco=10.0) is True  # sem categoria, sem piso
+    assert margem_e_confiavel("Usado - Bom", "iPhone 11 64 GB", preco=10.0, categoria=None) is True
+
+
+def test_medianas_todos_grupos_ignora_anuncio_abaixo_do_piso(tmp_path):
+    """Mesmo espírito de test_medianas_todos_grupos_ignora_anuncio_com_
+    defeito, mas pro piso de preço: um anúncio implausivelmente barato não
+    pode puxar a mediana do grupo pra baixo mesmo sem estar marcado como
+    defeituoso."""
+    storage = _reload_storage(tmp_path, "t13.db")
+    storage.init_db()
+    ads = [_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)]
+    ads.append(_ad(6, 50.0, condicao="Usado - Bom"))  # abaixo do piso de monitor (300), sem ser "defeito"
+    storage.upsert_ads(ads)
+
+    from common.stats import medianas_todos_grupos
+    assert medianas_todos_grupos()[("monitor", _grupo())] == 500.0  # não conta o 50.0
+
+
+def test_avaliar_aplica_piso_minimo_ponta_a_ponta(tmp_path):
+    """Mesmo teste acima, mas pelo caminho real do scraper (avaliar(), não
+    margem_e_confiavel() direto) -- é o que decide se sai notificação."""
+    from common.schema import IphoneAd
+
+    storage = _reload_storage(tmp_path, "t14.db")
+    storage.init_db()
+    precos = [900.0, 950.0, 1000.0, 1050.0, 1100.0]
+    ads = [
+        IphoneAd.model_validate(
+            {
+                "listing_id": i,
+                "titulo": f"iphone 11 {i}",
+                "url": f"https://x/{i}",
+                "data_publicacao": "2026-01-01T00:00:00",
+                "preco": p,
+                "modelo": "IPHONE 11",
+                "armazenamento_gb": 64,
+            }
+        )
+        for i, p in enumerate(precos, start=1)
+    ]
+    storage.upsert_ads(ads)
+
+    from common.stats import avaliar
+    # "iPhone 11 64GB" por R$10 de verdade (achado ao vivo) não pode virar notificação
+    assert avaliar(10.0, "iphone", "IPHONE 11 · 64GB", condicao="Usado - Bom") is None
+    # preço real dentro da faixa plausível continua avaliado normalmente
+    av = avaliar(700.0, "iphone", "IPHONE 11 · 64GB", condicao="Usado - Bom")
+    assert av is not None
+    assert av.eh_oportunidade is True
 
 
 def test_avaliar_none_quando_titulo_denuncia_defeito_apesar_da_condicao_boa(tmp_path):

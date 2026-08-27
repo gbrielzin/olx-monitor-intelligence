@@ -20,7 +20,8 @@ def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
     medianas = medianas_todos_grupos()
     avaliacoes = [
         avaliar_preco(preco, medianas[(categoria, grupo)], categoria)
-        if pd.notna(preco) and (categoria, grupo) in medianas and margem_e_confiavel(condicao, titulo)
+        if pd.notna(preco) and (categoria, grupo) in medianas
+           and margem_e_confiavel(condicao, titulo, preco, categoria)
         else None
         for preco, categoria, grupo, condicao, titulo in zip(
             df["preco"], df["categoria"], df["grupo"], df["condicao"], df["titulo"]
