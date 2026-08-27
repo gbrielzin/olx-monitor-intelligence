@@ -48,7 +48,7 @@ def _linha_extra(ad) -> str:
 
 def _msg_novo(ad, av: Avaliacao) -> str:
     return (
-        f"💰 *Oportunidade (novo anúncio)* — {ad.titulo}\n"
+        f"💰 Oportunidade (novo anúncio) — {ad.titulo}\n"
         f"Anunciado: R$ {av.preco:.0f} — {ad.municipio or '?'} — {ad.condicao or 'condição não informada'}"
         f"{_linha_extra(ad)}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
@@ -61,7 +61,7 @@ def _msg_novo(ad, av: Avaliacao) -> str:
 def _msg_queda(ad, av: Avaliacao, preco_anterior: float, novo_minimo: bool) -> str:
     estrela = " 🔻 mínimo histórico" if novo_minimo else ""
     return (
-        f"📉 *Baixou de preço e virou oportunidade* — {ad.titulo}\n"
+        f"📉 Baixou de preço e virou oportunidade — {ad.titulo}\n"
         f"R$ {preco_anterior:.0f} → R$ {av.preco:.0f}{estrela} — {ad.municipio or '?'} — "
         f"{ad.condicao or 'condição não informada'}"
         f"{_linha_extra(ad)}\n"

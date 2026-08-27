@@ -415,7 +415,12 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
 
         if a.listing_id not in estado_antes or not estava_ativo:
             resultado.novos.add(a.listing_id)
-            historico_rows.append((a.listing_id, plataforma, a.preco, preco_anterior, momento))
+            # preco=None não vira linha de histórico -- historico_precos.preco
+            # é NOT NULL, e um anúncio sem preço avistado não tem o que
+            # registrar como "primeiro preço" (nem faz falta: eh_minimo_historico
+            # só é chamado pra quedas, nunca pro avistamento inicial).
+            if a.preco is not None:
+                historico_rows.append((a.listing_id, plataforma, a.preco, preco_anterior, momento))
         elif a.preco is not None and preco_anterior is not None and a.preco < preco_anterior:
             resultado.quedas[a.listing_id] = (a.preco, preco_anterior)
             historico_rows.append((a.listing_id, plataforma, a.preco, preco_anterior, momento))

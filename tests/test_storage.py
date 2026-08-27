@@ -149,6 +149,31 @@ def test_alta_de_preco_atualiza_estado_mas_nao_gera_historico(tmp_path):
     assert total_historico == 1  # só o avistamento inicial, alta não conta
 
 
+def test_novo_anuncio_sem_preco_nao_quebra_e_nao_gera_historico(tmp_path):
+    """Achado ao vivo (rodada de computador logo após max_paginas subir
+    5->10): anúncio novo sem preço detectado (preco=None) fazia o INSERT
+    em historico_precos violar o NOT NULL da coluna -- upsert_ads()
+    inteiro estourava exceção e a rodada da categoria era descartada
+    por completo, sem gravar nada, em silêncio (só log + tentativa de
+    Telegram)."""
+    storage = _reload_storage(tmp_path, "teste_sem_preco.db")
+    storage.init_db()
+
+    coleta_1 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    resultado = storage.upsert_ads([_ad(1, coleta_1, preco=None)])
+
+    assert resultado.novos == {1}
+    with storage.get_connection() as conn:
+        total_anuncio = conn.execute(
+            "SELECT COUNT(*) FROM anuncios WHERE listing_id = 1"
+        ).fetchone()[0]
+        total_historico = conn.execute(
+            "SELECT COUNT(*) FROM historico_precos WHERE listing_id = 1"
+        ).fetchone()[0]
+    assert total_anuncio == 1  # o anúncio em si é salvo normalmente (preco NULL é válido ali)
+    assert total_historico == 0  # nada pra registrar como "primeiro preço"
+
+
 def test_anuncio_que_some_da_rodada_fica_inativo(tmp_path):
     storage = _reload_storage(tmp_path, "teste_sumico.db")
     storage.init_db()

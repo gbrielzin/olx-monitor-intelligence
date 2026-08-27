@@ -7,6 +7,14 @@ peso morto na imagem Docker. Uma chamada POST resolve.
 
 Se as credenciais não estiverem no .env, a notificação é pulada com um
 log de aviso em vez de derrubar o scraper — ver common/config.py.
+
+Sem parse_mode (texto puro, sem Markdown): a mensagem embute texto que
+a gente não controla -- título de anúncio (vendedor escreve o que
+quiser) e mensagem de exceção -- e um `_`/`*` desbalanceado nesse texto
+fazia o Telegram rejeitar com 400 "can't parse entities", derrubando em
+silêncio justo o alerta que devia ser a rede de segurança. Visto ao
+vivo: um erro de banco com "historico_precos.preco" no texto (os `_`
+do nome da coluna) bastou pra isso acontecer.
 """
 
 import logging
@@ -30,7 +38,6 @@ def enviar_telegram(mensagem: str) -> None:
             json={
                 "chat_id": settings.telegram_chat_id,
                 "text": mensagem,
-                "parse_mode": "Markdown",
             },
             timeout=10,
         )
