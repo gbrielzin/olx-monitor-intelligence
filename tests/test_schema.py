@@ -312,3 +312,71 @@ def test_computador_sem_cpu_em_lugar_nenhum_permanece_none():
     raw = _raw_computador(subject="Computador completo", props={"info_computer_cpu_model": None})
     ad = ComputadorAd.from_olx_json(raw)
     assert ad.cpu_modelo is None
+
+
+def test_computador_ram_estruturada_tem_prioridade_sobre_o_titulo():
+    raw = _raw_computador(subject="PC 32GB de RAM", props={"info_computer_ram_size": "8 GB"})
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.ram_gb == 8  # campo estruturado vence, título não é nem olhado
+
+
+def test_computador_ram_recuperada_do_titulo_quando_ausente():
+    """Achado nos dados reais: ~20% dos anúncios de computador vêm sem
+    info_computer_ram_size -- caem todos no mesmo grupo genérico "CPU
+    (?)"/"CPU sozinho" mesmo tendo RAM bem diferente entre si."""
+    raw = _raw_computador(
+        subject="Computador Completo-Trabalho- Estudos- Intel Core i52400, 8Gb Ram, SSD 120Gb",
+        props={"info_computer_ram_size": None},
+    )
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.ram_gb == 8
+
+
+def test_computador_ram_recuperada_do_titulo_com_ddr():
+    raw = _raw_computador(
+        subject="PC Gamer Completo Intel Corei3 10100F, 16Gb DDR4, GT 1030 2Gb, SSD 480Gb",
+        props={"info_computer_ram_size": None},
+    )
+    ad = ComputadorAd.from_olx_json(raw)
+    # não confunde com os 2Gb da placa de vídeo nem os 480Gb do SSD --
+    # só o número colado em "DDR4" conta
+    assert ad.ram_gb == 16
+
+
+def test_computador_ram_recuperada_do_titulo_com_memoria_e_ordem_invertida():
+    raw = _raw_computador(
+        subject="Computador Core 2 Duo + SSD 120GB + 3GB de memória",
+        props={"info_computer_ram_size": None},
+    )
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.ram_gb == 3
+
+    raw_invertido = _raw_computador(
+        subject="Computador i3 2100 SSD 120GB RAM 6GB",
+        props={"info_computer_ram_size": None},
+    )
+    ad_invertido = ComputadorAd.from_olx_json(raw_invertido)
+    assert ad_invertido.ram_gb == 6
+
+
+def test_computador_ram_ambigua_no_titulo_permanece_none():
+    """'8 Gbs' sozinho, sem 'ram'/'ddr'/'memória' colado, é ambíguo demais
+    (podia ser VRAM de placa de vídeo, tamanho de SSD) -- melhor ficar
+    None do que arriscar misturar grupo errado."""
+    raw = _raw_computador(
+        subject="Computador Completo i5 8 Gbs c/SSD + Monitor",
+        props={"info_computer_ram_size": None},
+    )
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.ram_gb is None
+
+
+def test_computador_ram_sem_mencao_no_titulo_permanece_none():
+    """Caso real: título explicitamente diz que NÃO tem RAM ('Sem Memória
+    RAM') -- sem número colado no marcador, não tem o que capturar."""
+    raw = _raw_computador(
+        subject="Computador Desktop Dell i3 2ª Geração (Sem Memória RAM)",
+        props={"info_computer_ram_size": None},
+    )
+    ad = ComputadorAd.from_olx_json(raw)
+    assert ad.ram_gb is None

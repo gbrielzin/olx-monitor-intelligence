@@ -86,6 +86,36 @@ def _recupera_cpu(cpu_olx: Optional[str], titulo: str) -> Optional[str]:
     return cpu_olx  # mantém None se nada bateu
 
 
+# Mesma lógica acima, mas pra RAM: quando info_computer_ram_size falta, o
+# título às vezes cita a RAM perto de um marcador claro ("8gb Ram", "16GB
+# DDR4", "3GB de memória"). Só extrai com marcador adjacente (ram/ddr/
+# memória) -- um número solto tipo "8 Gbs" sozinho no título é ambíguo
+# demais (podia ser VRAM de placa de vídeo ou tamanho de SSD por perto no
+# mesmo título) -- melhor não capturar do que capturar errado e misturar
+# um PC de 8GB com um de 16GB no mesmo grupo "CPU · 8GB RAM".
+_RAM_PATTERN = re.compile(
+    r"(\d{1,3})\s*(?:gb|gigas?)\s*(?:de\s+)?(?=ram|mem[oó]ria|ddr\d)"
+    r"|(?:ram|ddr\d)\s*(\d{1,3})\s*(?:gb|gigas?)",
+    re.IGNORECASE,
+)
+
+
+def _recupera_ram(ram_olx: Optional[int], titulo: str) -> Optional[int]:
+    if ram_olx:
+        return ram_olx
+    for match in _RAM_PATTERN.finditer(titulo):
+        valor = int(match.group(1) or match.group(2))
+        # RAM plausível nesse mercado (PC usado) é sempre bem menor que
+        # armazenamento -- achado testando: "SSD 120GB RAM 6GB" batia
+        # "120GB" + lookahead "RAM" e capturava a capacidade do SSD, não
+        # os 6GB de RAM de verdade logo depois. O lookahead (em vez de
+        # consumir "ram"/"ddr"/"memória") deixa esse marcador disponível
+        # pro próximo candidato do finditer quando o primeiro é rejeitado.
+        if valor <= 64:
+            return valor
+    return ram_olx  # mantém None se nada bateu (nenhum candidato plausível)
+
+
 def _limpa_preco_valor(v):
     """Converte 'R$ 1.250' -> 1250.0. Preço ausente vira None, nunca 0 — um
     0 pareceria uma pechincha impossível e contaminaria a mediana usada
@@ -346,7 +376,7 @@ class ComputadorAd(BaseModel):
             condicao=props.get("info_computer_condition"),
             cpu_marca=props.get("info_computer_cpu_brand"),
             cpu_modelo=_recupera_cpu(props.get("info_computer_cpu_model"), titulo),
-            ram_gb=_parse_armazenamento(props.get("info_computer_ram_size")),
+            ram_gb=_recupera_ram(_parse_armazenamento(props.get("info_computer_ram_size")), titulo),
             armazenamento_gb=_parse_armazenamento(props.get("info_computer_storage_size")),
             inclui_monitor="monitor" in features or "monitor" in titulo.lower(),
             vendedor_nome=olx_pay.get("transactionalSellerName"),
