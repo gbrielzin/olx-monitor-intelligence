@@ -4,7 +4,7 @@ import streamlit as st
 from charts import grafico_dispersao_hz, grafico_tendencia_quedas
 from common.config import settings
 from common.stats import avaliar_preco, margem_e_confiavel, medianas_todos_grupos
-from queries import carregar_ativos, carregar_quedas_precos
+from queries import carregar_ativos, carregar_coletas, carregar_novidades, carregar_quedas_precos
 from vendas import carregar_vendas, marcar_como_vendido, registrar_compra
 
 st.set_page_config(page_title="Monitor Gamer + iPhone — Grande Vitória", layout="wide")
@@ -165,6 +165,70 @@ def secao_mercado(categoria: str | None) -> None:
     st.bar_chart(df[coluna_agrupamento].value_counts().head(10))
 
 
+def secao_auditoria(categoria: str | None) -> None:
+    coletas = carregar_coletas(dias=7, categoria=categoria)
+    if coletas.empty:
+        st.info("Nenhuma rodada de coleta registrada ainda.")
+    else:
+        coletas = coletas.copy()
+        coletas["com_preco_pct"] = (coletas["com_preco"] / coletas["total_anuncios"] * 100).round(0)
+        st.caption(
+            "Últimas rodadas de coleta (7 dias) — mesma régua que o checkpoint de "
+            f"sanidade usa pra decidir se descarta uma rodada (mín. "
+            f"{settings.min_price_field_ratio:.0%} com preço, mín. "
+            f"{settings.min_ads_ratio:.0%} da média recente de anúncios)."
+        )
+        st.dataframe(
+            coletas[["coletado_em", "categoria", "total_anuncios", "novos", "quedas_preco", "com_preco_pct"]]
+            .sort_values("coletado_em", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "coletado_em": "Rodada",
+                "categoria": "Categoria",
+                "total_anuncios": "Total",
+                "novos": "Novos",
+                "quedas_preco": "Quedas de preço",
+                "com_preco_pct": st.column_config.NumberColumn("% com preço", format="%.0f%%"),
+            },
+        )
+
+    st.subheader("Anúncios novos (últimas 24h)")
+    if not settings.ia_auditoria_ativa:
+        st.caption(
+            "Auditoria por IA desativada (`ia_auditoria_ativa=False` em "
+            "`common/config.py`) — mostrando só os campos extraídos, sem "
+            "sinal de inconsistência."
+        )
+    novidades = carregar_novidades(dias=1, categoria=categoria)
+    if novidades.empty:
+        st.info("Nenhum anúncio novo capturado nas últimas 24h.")
+        return
+
+    novidades = novidades.copy()
+    novidades["sinal_ia"] = novidades["inconsistente"].map({1: "⚠️ inconsistente", 0: "ok"}).fillna("—")
+    st.dataframe(
+        novidades[
+            ["primeiro_visto_em", "categoria", "titulo", "preco", "grupo",
+             "condicao", "municipio", "sinal_ia", "motivo", "url"]
+        ].sort_values("primeiro_visto_em", ascending=False),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "primeiro_visto_em": "Visto em",
+            "categoria": "Categoria",
+            "titulo": "Anúncio",
+            "preco": st.column_config.NumberColumn("Preço", format="R$ %.0f"),
+            "grupo": "Grupo",
+            "condicao": "Condição",
+            "municipio": "Município",
+            "sinal_ia": "IA",
+            "motivo": "Motivo (IA)",
+            "url": st.column_config.LinkColumn("Link", display_text="abrir"),
+        },
+    )
+
+
 def secao_sobre() -> None:
     st.markdown(
         rf"""
@@ -277,8 +341,8 @@ categoria = {"Monitor": "monitor", "iPhone": "iphone", "Computador": "computador
 
 secao_kpis(categoria)
 
-tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas, tab_sobre = st.tabs(
-    ["🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas", "ℹ️ Sobre o negócio"]
+tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas, tab_auditoria, tab_sobre = st.tabs(
+    ["🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas", "🩺 Auditoria", "ℹ️ Sobre o negócio"]
 )
 with tab_oportunidades:
     secao_alertas(categoria)
@@ -288,5 +352,7 @@ with tab_mercado:
     secao_mercado(categoria)
 with tab_vendas:
     secao_vendas()
+with tab_auditoria:
+    secao_auditoria(categoria)
 with tab_sobre:
     secao_sobre()

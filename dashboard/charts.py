@@ -36,7 +36,12 @@ def grafico_tendencia_quedas(df: pd.DataFrame):
     # preco_anterior=0 é real (anúncio "doação"/grátis reaparecendo) mas não
     # tem % de queda que faça sentido (divisão por zero -> NaN -> plotly
     # quebra o marker size). Visto ao vivo em 2026-08-27.
-    sub = sub[sub["preco_anterior"] > 0]
+    # Um anúncio que sumiu e reapareceu é gravado em historico_precos como
+    # "novo avistamento" com o preco_anterior de antes de sumir (ver
+    # storage.py:upsert_ads) -- se o preço voltou MAIOR do que era, isso não
+    # é uma queda de verdade, e o Plotly quebra com tamanho de marker
+    # negativo. Visto ao vivo em 2026-09-07.
+    sub = sub[(sub["preco_anterior"] > 0) & (sub["preco"] < sub["preco_anterior"])]
     if sub.empty:
         return None
     sub["queda_pct"] = (sub["preco_anterior"] - sub["preco"]) / sub["preco_anterior"] * 100

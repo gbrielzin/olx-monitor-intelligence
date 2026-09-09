@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from auditoria_ia import auditar_anuncio
 from common.config import settings
 from common.schema import ComputadorAd, IphoneAd, MonitorAd
 from common.storage import contagem_media_ultimas_coletas, eh_minimo_historico, init_db, upsert_ads
@@ -26,8 +27,9 @@ from diff import separar_novidades
 from fetcher import FetchError, fetch_html, url_pagina
 from notifier import enviar_telegram
 from parser import build_ads, extract_ads
+from resumo_diario import enviar_resumo_diario
 from sanity import checar_sanidade
-from common.stats import Avaliacao, avaliar
+from common.stats import Avaliacao, avaliar, grava_snapshot_diario
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("scraper")
@@ -124,7 +126,23 @@ def rodar_coleta(*, nome: str, search_url: str, ad_class, categoria: str) -> Non
         nome, len(ads), len(novos), len(quedas),
     )
 
+    try:
+        grava_snapshot_diario(categoria)
+    except Exception as e:
+        # Nunca deixa a base de dado do histórico de preço derrubar a rodada
+        # nem os alertas -- mesmo espírito de notifier.py: uma camada a mais
+        # não pode quebrar o que já funcionava antes dela existir.
+        logger.warning("Falha ao gravar snapshot diário (%s): %s", nome, e)
+
     for ad in novos:
+        try:
+            auditar_anuncio(ad)
+        except Exception as e:
+            # Mesmo espírito do try/except em volta de grava_snapshot_diario
+            # acima: uma camada a mais (e paga, chamando API externa) não
+            # pode derrubar a rodada nem os alertas de oportunidade abaixo.
+            logger.warning("Falha ao auditar anúncio %s via IA (%s): %s", ad.listing_id, nome, e)
+
         av = avaliar(ad.preco, ad.categoria, ad.grupo, ad.condicao, ad.titulo)
         if av and av.eh_oportunidade:
             enviar_telegram(_msg_novo(ad, av))
@@ -164,9 +182,17 @@ def main() -> None:
             minutes=settings.scrape_interval_minutes,
             next_run_time=datetime.now(timezone.utc),  # roda uma vez imediatamente
         )
+    scheduler.add_job(
+        enviar_resumo_diario,
+        "cron",
+        hour=settings.resumo_diario_hora_utc,
+        minute=0,
+        timezone=timezone.utc,
+    )
     logger.info(
-        "Agendador ativo: monitor + iPhone + computador, a cada %d min.",
-        settings.scrape_interval_minutes,
+        "Agendador ativo: monitor + iPhone + computador, a cada %d min. "
+        "Resumo diário às %02d:00 UTC (se resumo_diario_ativo=True).",
+        settings.scrape_interval_minutes, settings.resumo_diario_hora_utc,
     )
     scheduler.start()
 

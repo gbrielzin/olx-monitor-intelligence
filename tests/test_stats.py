@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from common.config import settings
 from common.schema import MonitorAd
@@ -377,3 +377,155 @@ def test_avaliar_none_quando_titulo_denuncia_defeito_apesar_da_condicao_boa(tmp_
         condicao="Usado - Excelente", titulo="Monitor AOC 27p COM DEFEITO NÃO LIGA",
     )
     assert resultado is None
+
+
+# --- grava_snapshot_diario / tendencia_grupo (histórico de mercado) ---
+
+def _insere_mediana_diaria(storage, data: str, grupo: str, mediana: float, categoria: str = "monitor", amostra: int = 5) -> None:
+    with storage.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO medianas_diarias (data, categoria, grupo, mediana, amostra, registrado_em) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (data, categoria, grupo, mediana, amostra, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def test_grava_snapshot_diario_grava_uma_linha_por_grupo_confiavel(tmp_path):
+    storage = _reload_storage(tmp_path, "snap1.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)])
+
+    from common.stats import grava_snapshot_diario
+    assert grava_snapshot_diario("monitor") == 1
+
+    hoje = datetime.now(timezone.utc).date().isoformat()
+    with storage.get_connection() as conn:
+        linha = conn.execute(
+            "SELECT mediana, amostra FROM medianas_diarias WHERE data=? AND categoria='monitor' AND grupo=?",
+            (hoje, _grupo()),
+        ).fetchone()
+    assert linha == (500.0, 5)
+
+
+def test_grava_snapshot_diario_idempotente_no_mesmo_dia(tmp_path):
+    storage = _reload_storage(tmp_path, "snap2.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)])
+
+    from common.stats import grava_snapshot_diario
+    assert grava_snapshot_diario("monitor") == 1
+    assert grava_snapshot_diario("monitor") == 0  # já gravou hoje -- não duplica
+
+    with storage.get_connection() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM medianas_diarias").fetchone()[0]
+    assert total == 1
+
+
+def test_grava_snapshot_diario_ignora_grupo_sem_amostra_minima(tmp_path):
+    storage = _reload_storage(tmp_path, "snap3.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(1, 300.0), _ad(2, 400.0)])  # só 2, mínimo configurado é 5
+
+    from common.stats import grava_snapshot_diario
+    assert grava_snapshot_diario("monitor") == 0
+    with storage.get_connection() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM medianas_diarias").fetchone()[0]
+    assert total == 0
+
+
+def test_grava_snapshot_diario_filtra_por_categoria(tmp_path):
+    storage = _reload_storage(tmp_path, "snap4.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)])
+
+    from common.stats import grava_snapshot_diario
+    assert grava_snapshot_diario("iphone") == 0  # não tem nenhum anúncio dessa categoria
+    assert grava_snapshot_diario("monitor") == 1
+
+
+def test_tendencia_grupo_none_sem_mediana_atual_confiavel(tmp_path):
+    storage = _reload_storage(tmp_path, "tend1.db")
+    storage.init_db()
+
+    from common.stats import tendencia_grupo
+    assert tendencia_grupo("monitor", _grupo()) is None
+
+
+def test_tendencia_grupo_sem_historico_retorna_indeterminado(tmp_path):
+    storage = _reload_storage(tmp_path, "tend2.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)])
+
+    from common.stats import tendencia_grupo
+    t = tendencia_grupo("monitor", _grupo(), dias=30)
+    assert t is not None
+    assert t.mediana_atual == 500.0
+    assert t.mediana_periodo is None
+    assert t.dias_disponiveis == 0
+    assert t.direcao == "indeterminado"
+
+
+def test_tendencia_grupo_dias_insuficientes_nao_fabrica_mediana_periodo(tmp_path):
+    """dias_disponiveis (3) < dias pedido (30) -- mediana_periodo tem que
+    ficar None, não uma média calculada só sobre os 3 dias que existem."""
+    storage = _reload_storage(tmp_path, "tend3.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)])
+
+    hoje = datetime.now(timezone.utc).date()
+    for delta, mediana in [(2, 400.0), (1, 450.0), (0, 500.0)]:
+        _insere_mediana_diaria(storage, (hoje - timedelta(days=delta)).isoformat(), _grupo(), mediana)
+
+    from common.stats import tendencia_grupo
+    t = tendencia_grupo("monitor", _grupo(), dias=30)
+    assert t.dias_disponiveis == 3
+    assert t.mediana_periodo is None
+    assert t.direcao == "subindo"  # 400 -> 500 = +25%, calculado com o que existe
+
+
+def test_tendencia_grupo_mediana_periodo_quando_dias_disponiveis_e_suficiente(tmp_path):
+    storage = _reload_storage(tmp_path, "tend4.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)])
+
+    hoje = datetime.now(timezone.utc).date()
+    for delta, mediana in [(1, 500.0), (0, 510.0)]:
+        _insere_mediana_diaria(storage, (hoje - timedelta(days=delta)).isoformat(), _grupo(), mediana)
+
+    from common.stats import tendencia_grupo
+    t = tendencia_grupo("monitor", _grupo(), dias=2)
+    assert t.dias_disponiveis == 2
+    assert t.mediana_periodo == 505.0
+    assert t.direcao == "estavel"  # (510-500)/500 = 2%, dentro do limiar de 5%
+
+
+def test_tendencia_grupo_direcao_caindo(tmp_path):
+    storage = _reload_storage(tmp_path, "tend5.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)])
+
+    hoje = datetime.now(timezone.utc).date()
+    for delta, mediana in [(1, 500.0), (0, 400.0)]:
+        _insere_mediana_diaria(storage, (hoje - timedelta(days=delta)).isoformat(), _grupo(), mediana)
+
+    from common.stats import tendencia_grupo
+    t = tendencia_grupo("monitor", _grupo(), dias=2)
+    assert t.direcao == "caindo"
+
+
+def test_tendencia_grupo_um_dia_disponivel_e_indeterminado(tmp_path):
+    """1 ponto só não define direção nenhuma -- sem isso, primeira==ultima
+    (o mesmo ponto) sempre daria variação 0% e pareceria 'estável' por
+    acidente, não porque o preço realmente ficou estável."""
+    storage = _reload_storage(tmp_path, "tend6.db")
+    storage.init_db()
+    storage.upsert_ads([_ad(i, p) for i, p in enumerate([300.0, 400.0, 500.0, 600.0, 700.0], start=1)])
+
+    hoje = datetime.now(timezone.utc).date().isoformat()
+    _insere_mediana_diaria(storage, hoje, _grupo(), 450.0)
+
+    from common.stats import tendencia_grupo
+    t = tendencia_grupo("monitor", _grupo(), dias=30)
+    assert t.dias_disponiveis == 1
+    assert t.direcao == "indeterminado"
+    assert t.amostra_periodo == 5

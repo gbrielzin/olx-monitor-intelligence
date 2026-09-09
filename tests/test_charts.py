@@ -44,6 +44,23 @@ def test_grafico_tendencia_quedas_mistura_zero_com_queda_real():
     assert len(fig.data[0].x) == 1  # só a queda real de verdade entra no gráfico
 
 
+def test_grafico_tendencia_quedas_ignora_reaparicao_com_preco_maior_sem_quebrar():
+    """Achado ao vivo em 2026-09-07: um anúncio que sumiu e reaparece com
+    preço MAIOR do que tinha antes de sumir é gravado em historico_precos
+    como 'novo avistamento' com o preco_anterior de antes (ver
+    storage.py:upsert_ads) -- não é uma queda de verdade, e o plotly
+    quebrava a página inteira ao tentar usar tamanho de marcador negativo."""
+    df = pd.DataFrame(
+        [
+            _linha(preco_anterior=500.0, preco=700.0, listing_id=1),  # reapareceu mais caro
+            _linha(preco_anterior=1000.0, preco=800.0, listing_id=2),  # queda real
+        ]
+    )
+    fig = grafico_tendencia_quedas(df)
+    assert fig is not None
+    assert len(fig.data[0].x) == 1  # só a queda real entra no gráfico
+
+
 def test_grafico_tendencia_quedas_caso_normal_gera_figura():
     df = pd.DataFrame(
         [

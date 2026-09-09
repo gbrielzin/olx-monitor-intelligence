@@ -122,6 +122,42 @@ CREATE TABLE IF NOT EXISTS vendas (
     data_venda TEXT,
     criado_em TEXT NOT NULL
 );
+
+-- Uma linha por (dia, categoria, grupo) -- a "foto" da mediana de mercado
+-- daquele dia. Gravada pelo scraper (common/stats.py:grava_snapshot_diario),
+-- não neste módulo, pra reaproveitar a mesma lógica de filtro/mediana de
+-- medianas_todos_grupos() em vez de duplicá-la aqui (storage.py nunca
+-- importa stats.py -- ver docstring do módulo). É o que sustenta tendência
+-- de preço e backtest sem viés de olhar o futuro: sem uma foto própria por
+-- dia, não tem como saber de verdade qual era a mediana num dia que já
+-- passou -- só o estado atual fica salvo em `anuncios`.
+CREATE TABLE IF NOT EXISTS medianas_diarias (
+    data TEXT NOT NULL,
+    categoria TEXT NOT NULL,
+    grupo TEXT NOT NULL,
+    mediana REAL NOT NULL,
+    amostra INTEGER NOT NULL,
+    registrado_em TEXT NOT NULL,
+    PRIMARY KEY (data, categoria, grupo)
+);
+
+-- Auditoria da IA sobre anúncios NOVOS (scraper/auditoria_ia.py) -- 1 linha
+-- por (listing_id, plataforma), gravada na 1a vez que o anúncio é visto.
+-- Não é re-rodada num anúncio já visto de novo -- custo por chamada, sem
+-- ganho (o que já foi auditado não muda). Só existe linha aqui quando
+-- settings.ia_auditoria_ativa=True (opcional, desativado por padrão).
+-- Nunca influencia mediana/alerta (common/stats.py) -- é só sinal pro
+-- usuário revisar na aba de auditoria do dashboard, não um veto automático.
+CREATE TABLE IF NOT EXISTS auditoria_ia (
+    listing_id INTEGER NOT NULL,
+    plataforma TEXT NOT NULL DEFAULT 'olx',
+    inconsistente INTEGER NOT NULL,
+    motivo TEXT,
+    resumo TEXT,
+    modelo TEXT NOT NULL,
+    verificado_em TEXT NOT NULL,
+    PRIMARY KEY (listing_id, plataforma)
+);
 """
 
 _COLUNAS_ANUNCIO = (

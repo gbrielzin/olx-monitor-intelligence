@@ -88,6 +88,26 @@ class Settings(BaseSettings):
     orcamento_minimo_computador: float = 400.0
     orcamento_minimo_iphone: float = 600.0
 
+    # --- Auditoria de anúncios novos via IA (opcional, custa por chamada) ---
+    # Compara título x campos extraídos de cada anúncio NOVO (nunca dos que só
+    # seguem ativos) via LLM, flagra inconsistência -- ver
+    # scraper/auditoria_ia.py. Desativado por padrão: precisa de
+    # anthropic_api_key preenchida pra ligar.
+    ia_auditoria_ativa: bool = False
+    anthropic_api_key: str = ""
+    # claude-opus-5 é o modelo mais caro da Anthropic -- ajuste aqui pra um
+    # mais barato (ex: claude-haiku-4-5) depois de ver o custo real por
+    # rodada (3 categorias x só os anúncios novos, não o catálogo inteiro).
+    ia_modelo: str = "claude-opus-5"
+
+    # --- Resumo diário agentic (opcional, custa 1 chamada de IA por dia) ---
+    # Junta oportunidades ativas + tendência de preço das 3 categorias num
+    # panorama, pede pro LLM escrever um resumo corrido e manda por Telegram
+    # de manhã -- ver scraper/resumo_diario.py. Reaproveita
+    # anthropic_api_key/ia_modelo acima. Desativado por padrão.
+    resumo_diario_ativo: bool = False
+    resumo_diario_hora_utc: int = 11  # ~8h em Vitória-ES (UTC-3)
+
     # --- Banco de dados ---
     db_path: str = "/data/olx_monitor.db"
 
