@@ -7,8 +7,8 @@ from common.stats import avaliar_preco, margem_e_confiavel, medianas_todos_grupo
 from queries import carregar_ativos, carregar_coletas, carregar_novidades, carregar_quedas_precos
 from vendas import carregar_vendas, marcar_como_vendido, registrar_compra
 
-st.set_page_config(page_title="Monitor Gamer + iPhone — Grande Vitória", layout="wide")
-st.title("Inteligência de mercado (OLX-ES)")
+st.set_page_config(page_title="iPhone — OLX multi-estado", layout="wide")
+st.title("Inteligência de mercado (OLX)")
 
 
 def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
@@ -35,14 +35,14 @@ def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.fragment(run_every=60)
-def secao_kpis(categoria: str | None) -> None:
-    df = carregar_ativos(categoria)
+def secao_kpis(categoria: str | None, uf: str | None = None) -> None:
+    df = carregar_ativos(categoria, uf)
     if df.empty:
         st.info("Ainda sem dados coletados.")
         return
     df = _com_avaliacao(df)
     oportunidades = df[df["oportunidade"]]
-    quedas_7d = carregar_quedas_precos(dias=7, categoria=categoria)
+    quedas_7d = carregar_quedas_precos(dias=7, categoria=categoria, uf=uf)
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Anúncios ativos", len(df))
@@ -55,8 +55,8 @@ def secao_kpis(categoria: str | None) -> None:
 
 
 @st.fragment(run_every=60)
-def secao_alertas(categoria: str | None) -> None:
-    df = carregar_ativos(categoria)
+def secao_alertas(categoria: str | None, uf: str | None = None) -> None:
+    df = carregar_ativos(categoria, uf)
     if df.empty:
         st.info("Ainda sem dados coletados.")
         return
@@ -88,13 +88,14 @@ def secao_alertas(categoria: str | None) -> None:
     )
     st.dataframe(
         oportunidades[
-            ["categoria", "titulo", "preco", "apos_negociar", "margem_rs", "margem_pct",
+            ["categoria", "uf", "titulo", "preco", "apos_negociar", "margem_rs", "margem_pct",
              "condicao", "saude_bateria", "inclui_monitor", "marca", "municipio", "url"]
         ].sort_values("margem_pct", ascending=False),
         use_container_width=True,
         hide_index=True,
         column_config={
             "categoria": "Categoria",
+            "uf": "Estado",
             "titulo": "Anúncio",
             "preco": st.column_config.NumberColumn("Anunciado", format="R$ %.0f"),
             "apos_negociar": st.column_config.NumberColumn("Após negociar", format="R$ %.0f"),
@@ -110,8 +111,8 @@ def secao_alertas(categoria: str | None) -> None:
     )
 
 
-def secao_tendencia(categoria: str | None) -> None:
-    quedas = carregar_quedas_precos(dias=30, categoria=categoria)
+def secao_tendencia(categoria: str | None, uf: str | None = None) -> None:
+    quedas = carregar_quedas_precos(dias=30, categoria=categoria, uf=uf)
     if quedas.empty:
         st.info(
             "Sem quedas de preço registradas ainda nos últimos 30 dias. "
@@ -141,8 +142,8 @@ def secao_tendencia(categoria: str | None) -> None:
     )
 
 
-def secao_mercado(categoria: str | None) -> None:
-    df = carregar_ativos(categoria)
+def secao_mercado(categoria: str | None, uf: str | None = None) -> None:
+    df = carregar_ativos(categoria, uf)
     if df.empty:
         st.info("Sem anúncios ativos ainda.")
         return
@@ -165,8 +166,8 @@ def secao_mercado(categoria: str | None) -> None:
     st.bar_chart(df[coluna_agrupamento].value_counts().head(10))
 
 
-def secao_auditoria(categoria: str | None) -> None:
-    coletas = carregar_coletas(dias=7, categoria=categoria)
+def secao_auditoria(categoria: str | None, uf: str | None = None) -> None:
+    coletas = carregar_coletas(dias=7, categoria=categoria, uf=uf)
     if coletas.empty:
         st.info("Nenhuma rodada de coleta registrada ainda.")
     else:
@@ -200,7 +201,7 @@ def secao_auditoria(categoria: str | None) -> None:
             "`common/config.py`) — mostrando só os campos extraídos, sem "
             "sinal de inconsistência."
         )
-    novidades = carregar_novidades(dias=1, categoria=categoria)
+    novidades = carregar_novidades(dias=1, categoria=categoria, uf=uf)
     if novidades.empty:
         st.info("Nenhum anúncio novo capturado nas últimas 24h.")
         return
@@ -209,7 +210,7 @@ def secao_auditoria(categoria: str | None) -> None:
     novidades["sinal_ia"] = novidades["inconsistente"].map({1: "⚠️ inconsistente", 0: "ok"}).fillna("—")
     st.dataframe(
         novidades[
-            ["primeiro_visto_em", "categoria", "titulo", "preco", "grupo",
+            ["primeiro_visto_em", "categoria", "uf", "titulo", "preco", "grupo",
              "condicao", "municipio", "sinal_ia", "motivo", "url"]
         ].sort_values("primeiro_visto_em", ascending=False),
         use_container_width=True,
@@ -217,6 +218,7 @@ def secao_auditoria(categoria: str | None) -> None:
         column_config={
             "primeiro_visto_em": "Visto em",
             "categoria": "Categoria",
+            "uf": "Estado",
             "titulo": "Anúncio",
             "preco": st.column_config.NumberColumn("Preço", format="R$ %.0f"),
             "grupo": "Grupo",
@@ -232,19 +234,14 @@ def secao_auditoria(categoria: str | None) -> None:
 def secao_sobre() -> None:
     st.markdown(
         rf"""
-Sistema de arbitragem informacional: monitora anúncios (monitor gamer,
-iPhone e computador completo, por enquanto) na OLX (Grande Vitória/ES) a
-cada {settings.scrape_interval_minutes} min, calcula a mediana de mercado
-de cada grupo (marca+tipo pra monitor, modelo+armazenamento pra iPhone,
-CPU+RAM pra computador), e avisa quando um anúncio aparece — ou baixa de
-preço — a **{settings.oportunidade_limiar:.0%} da mediana do grupo ou
-menos**.
-
-**Sobre "inclui monitor" em computador:** a OLX informa *que* o kit vem
-com monitor, não *qual* (marca/tamanho/Hz não aparecem separados) — então
-o sistema mostra esse sinal, mas não tenta calcular quanto o monitor
-incluso vale sozinho. Julgamento final de "esse kit vale mais desmontado"
-é seu.
+Sistema de arbitragem informacional: monitora anúncios de **iPhone** na
+OLX, em múltiplos estados, a cada {settings.scrape_interval_minutes} min,
+calcula a mediana de mercado de cada grupo (modelo+armazenamento — separada
+por estado, um iPhone de SP não compete pela mesma mediana que um do ES),
+e avisa quando um anúncio aparece — ou baixa de preço — a
+**{settings.oportunidade_limiar:.0%} da mediana do grupo ou menos**. Cada
+estado pode ter seu próprio grupo do Telegram recebendo os alertas — a
+região pessoal do administrador fica só no chat pessoal.
 
 **A tese:** parte do mercado de usados é ineficiente — vendedor urgente ou
 desinformado anuncia abaixo do preço justo. Achar isso manualmente, na hora
@@ -255,12 +252,12 @@ fisicamente, não substitui negociar. O alerta já desconta
 {settings.desconto_negociacao_esperado:.0%} de negociação esperada na
 margem estimada, mas o número real só se confirma na conversa com o vendedor.
 
-**Onde focar em monitor**, pelos dados reais do próprio catálogo: entre
-R\$300 e R\$600, em estado Novo ou Usado-Excelente — maior volume de
-anúncios e melhor relação margem/risco do que ticket único mais caro ou
-faixa abaixo de R\$300 (mais risco de defeito).
-
-Análise completa, com os números que sustentam essa recomendação:
+**Histórico:** monitor gamer e computador completo também foram
+monitorados — o mercado se mostrou ineficiente pra continuar, mas os dados
+coletados ficam salvos e visíveis nas outras abas (filtro "Monitor"/
+"Computador") como referência histórica, sem coleta nova. A análise que
+sustentou a faixa recomendada de monitor na época (R\$300–600, Novo/
+Usado-Excelente) continua disponível:
 [Raio-X do Monitor Gamer](https://claude.ai/code/artifact/333187dc-24c9-4d68-8718-eed4fb54de7b)
         """
     )
@@ -339,20 +336,28 @@ def secao_vendas() -> None:
 categoria_label = st.radio("Categoria", ["Monitor", "iPhone", "Computador", "Todas"], horizontal=True)
 categoria = {"Monitor": "monitor", "iPhone": "iphone", "Computador": "computador", "Todas": None}[categoria_label]
 
-secao_kpis(categoria)
+# Seletor de Estado só aparece com mais de 1 região de iPhone configurada
+# -- sem isso (hoje: só ES), nada muda visualmente no dashboard.
+uf = None
+ufs_iphone = sorted({r.uf for r in settings.iphone_regioes})
+if categoria == "iphone" and len(ufs_iphone) > 1:
+    uf_label = st.radio("Estado", ["Todos"] + ufs_iphone, horizontal=True)
+    uf = None if uf_label == "Todos" else uf_label
+
+secao_kpis(categoria, uf)
 
 tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas, tab_auditoria, tab_sobre = st.tabs(
     ["🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas", "🩺 Auditoria", "ℹ️ Sobre o negócio"]
 )
 with tab_oportunidades:
-    secao_alertas(categoria)
+    secao_alertas(categoria, uf)
 with tab_tendencia:
-    secao_tendencia(categoria)
+    secao_tendencia(categoria, uf)
 with tab_mercado:
-    secao_mercado(categoria)
+    secao_mercado(categoria, uf)
 with tab_vendas:
     secao_vendas()
 with tab_auditoria:
-    secao_auditoria(categoria)
+    secao_auditoria(categoria, uf)
 with tab_sobre:
     secao_sobre()
