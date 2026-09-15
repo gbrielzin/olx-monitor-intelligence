@@ -1,10 +1,16 @@
 import pandas as pd
 import streamlit as st
 
-from charts import grafico_dispersao_hz, grafico_tendencia_quedas
+from charts import grafico_dispersao_hz, grafico_distribuicao_preco, grafico_tendencia_quedas
 from common.config import settings
 from common.stats import avaliar_preco, margem_e_confiavel, medianas_todos_grupos
-from queries import carregar_ativos, carregar_coletas, carregar_novidades, carregar_quedas_precos
+from queries import (
+    carregar_ativos,
+    carregar_coletas,
+    carregar_novidades,
+    carregar_quedas_precos,
+    carregar_tempo_no_ar,
+)
 from vendas import carregar_vendas, marcar_como_vendido, registrar_compra
 
 st.set_page_config(page_title="iPhone — OLX multi-estado", layout="wide")
@@ -34,6 +40,24 @@ def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _frescor_da_coleta(categoria: str | None, uf: str | None) -> tuple[str, str | None]:
+    """(texto da última coleta, uptime dos últimos 7 dias em % ou None).
+    Uptime só é calculado com uma categoria escolhida -- cada categoria tem
+    sua própria agenda (monitor/computador pararam de rodar em 12/09/2026,
+    ver CASE_DATA_ANALYTICS.md), então misturar todas sob 'Todas' não tem
+    uma frequência esperada única pra comparar contra."""
+    coletas = carregar_coletas(dias=7, categoria=categoria, uf=uf)
+    if coletas.empty:
+        return "—", None
+    ultima = pd.to_datetime(coletas["coletado_em"]).max()
+    delta_min = (pd.Timestamp.now(tz="UTC") - ultima).total_seconds() / 60
+    texto = f"há {delta_min:.0f} min" if delta_min < 60 else f"há {delta_min / 60:.1f}h"
+    if categoria is None:
+        return texto, None
+    esperadas = 7 * 24 * 60 / settings.scrape_interval_minutes
+    return texto, len(coletas) / esperadas * 100
+
+
 @st.fragment(run_every=60)
 def secao_kpis(categoria: str | None, uf: str | None = None) -> None:
     df = carregar_ativos(categoria, uf)
@@ -43,8 +67,9 @@ def secao_kpis(categoria: str | None, uf: str | None = None) -> None:
     df = _com_avaliacao(df)
     oportunidades = df[df["oportunidade"]]
     quedas_7d = carregar_quedas_precos(dias=7, categoria=categoria, uf=uf)
+    ultima_coleta, uptime = _frescor_da_coleta(categoria, uf)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Anúncios ativos", len(df))
     col2.metric("Oportunidades agora", len(oportunidades))
     col3.metric(
@@ -52,6 +77,15 @@ def secao_kpis(categoria: str | None, uf: str | None = None) -> None:
         f"R$ {oportunidades['margem_rs'].median():.0f}" if not oportunidades.empty else "—",
     )
     col4.metric("Quedas de preço (7 dias)", len(quedas_7d))
+    col5.metric("Última coleta", ultima_coleta)
+    if uptime is not None:
+        st.caption(
+            f"Uptime da coleta (7 dias, {categoria}): {uptime:.0f}% das rodadas "
+            f"esperadas a cada {settings.scrape_interval_minutes} min — medido "
+            "direto na tabela `coletas`, não é estimativa. Coleta roda numa "
+            "máquina pessoal, não um servidor sempre ligado (ver "
+            "OLX_DEEP_DIVE.md, seção 7.5)."
+        )
 
 
 @st.fragment(run_every=60)
@@ -147,6 +181,34 @@ def secao_mercado(categoria: str | None, uf: str | None = None) -> None:
     if df.empty:
         st.info("Sem anúncios ativos ainda.")
         return
+
+    st.subheader("Distribuição de preço")
+    sufixo = f" — {categoria}" if categoria else ""
+    fig_dist = grafico_distribuicao_preco(df, sufixo)
+    if fig_dist:
+        st.plotly_chart(fig_dist, use_container_width=True)
+        st.caption(
+            "Mediana (verde) é a régua usada por `common/stats.py` pra decidir "
+            "oportunidade -- não a média (vermelho), que qualquer anúncio muito "
+            "fora da curva puxa pra um lado."
+        )
+
+    tempo_no_ar = carregar_tempo_no_ar(categoria, uf)
+    if not tempo_no_ar.empty:
+        dias = (
+            pd.to_datetime(tempo_no_ar["removido_em"]) - pd.to_datetime(tempo_no_ar["primeiro_visto_em"])
+        ).dt.total_seconds() / 86400
+        dias = dias[dias >= 0]
+        if not dias.empty:
+            st.subheader("Tempo médio no ar")
+            c1, c2 = st.columns(2)
+            c1.metric("Mediana", f"{dias.median():.1f} dias")
+            c2.metric("Amostra", len(dias))
+            st.caption(
+                "Quanto tempo, em média, um anúncio fica no catálogo antes de "
+                "sumir da busca (não diferencia venda de desanúncio -- o "
+                "scraper só sabe que parou de aparecer)."
+            )
 
     # só existe pra monitor (precisa de hz_exato/tipo_monitor) -- pra
     # iPhone a lista de tipos vem vazia e o loop não roda, sem quebrar.
@@ -333,8 +395,23 @@ def secao_vendas() -> None:
     )
 
 
-categoria_label = st.radio("Categoria", ["Monitor", "iPhone", "Computador", "Todas"], horizontal=True)
-categoria = {"Monitor": "monitor", "iPhone": "iphone", "Computador": "computador", "Todas": None}[categoria_label]
+categoria_label = st.radio(
+    "Categoria", ["iPhone", "Monitor", "Computador", "Todas"], horizontal=True,
+    help="iPhone é a única categoria ainda coletada -- Monitor e Computador "
+    "pararam de ser agendados em 12/09/2026 (mercado se mostrou ineficaz, "
+    "ver CASE_DATA_ANALYTICS.md) e ficam com dado congelado: os anúncios "
+    "continuam marcados como ativos mesmo sem confirmação recente de que "
+    "ainda estão no ar, então oportunidade/margem ali não são confiáveis.",
+)
+categoria = {"iPhone": "iphone", "Monitor": "monitor", "Computador": "computador", "Todas": None}[categoria_label]
+if categoria in ("monitor", "computador") or categoria is None:
+    st.warning(
+        "⚠️ Monitor e Computador pararam de ser coletados em 12/09/2026 — "
+        "os anúncios dessas categorias ficam com o último estado visto antes "
+        "disso (não são re-checados), então margem/oportunidade aqui refletem "
+        "dado congelado, não o mercado agora.",
+        icon="⚠️",
+    )
 
 # Seletor de Estado só aparece com mais de 1 região de iPhone configurada
 # -- sem isso (hoje: só ES), nada muda visualmente no dashboard.

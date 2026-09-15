@@ -26,6 +26,37 @@ def grafico_dispersao_hz(df: pd.DataFrame, tipo_monitor: str):
     return fig
 
 
+def grafico_distribuicao_preco(df: pd.DataFrame, titulo_sufixo: str = ""):
+    """Histograma de preço com mediana e média marcadas -- explica
+    visualmente por que common/stats.py usa mediana (não média) como preço
+    de referência: um punhado de anúncio muito caro ou muito barato puxa a
+    média, mas quase não move a mediana. Também é a primeira coisa que
+    expõe visualmente um grupo com dado congelado (ver alerta de categoria
+    descontinuada): a "margem" gigante nesses casos parte do MESMO
+    fenômeno que este gráfico ilustra, só que sem outlier nenhum de
+    verdade -- é média/mediana calculada sobre anúncio que não é mais
+    checado."""
+    sub = df[df["preco"].notna()]
+    if sub.empty:
+        return None
+    mediana = sub["preco"].median()
+    media = sub["preco"].mean()
+    fig = px.histogram(
+        sub,
+        x="preco",
+        nbins=40,
+        labels={"preco": "Preço (R$)"},
+        title=f"Distribuição de preço{titulo_sufixo}",
+    )
+    fig.add_vline(x=mediana, line_dash="dash", line_color="green")
+    fig.add_annotation(x=mediana, y=1, yref="paper", yanchor="bottom", showarrow=False,
+                        text=f"mediana R$ {mediana:.0f}", font=dict(color="green"))
+    fig.add_vline(x=media, line_dash="dot", line_color="red")
+    fig.add_annotation(x=media, y=0.92, yref="paper", yanchor="bottom", showarrow=False,
+                        text=f"média R$ {media:.0f}", font=dict(color="red"))
+    return fig
+
+
 def grafico_tendencia_quedas(df: pd.DataFrame):
     """Quedas de preço reais ao longo do tempo -- só existe porque o schema
     novo grava 1 linha por evento de queda, não 1 linha por rodada de
