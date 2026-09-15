@@ -116,6 +116,13 @@ def _recupera_ram(ram_olx: Optional[int], titulo: str) -> Optional[int]:
     return ram_olx  # mantém None se nada bateu (nenhum candidato plausível)
 
 
+def _normaliza_uf(valor: Optional[str]) -> Optional[str]:
+    """OLX manda a UF em maiúsculas ('ES'), mas não custa garantir --
+    é usada como prefixo de `IphoneAd.grupo` (chave de comparabilidade),
+    então uma UF vindo em caixa diferente criaria um grupo novo por engano."""
+    return valor.upper() if valor else None
+
+
 def _limpa_preco_valor(v):
     """Converte 'R$ 1.250' -> 1250.0. Preço ausente vira None, nunca 0 — um
     0 pareceria uma pechincha impossível e contaminaria a mediana usada
@@ -139,6 +146,7 @@ class MonitorAd(BaseModel):
     data_publicacao: datetime
     municipio: Optional[str] = None
     bairro: Optional[str] = None
+    uf: Optional[str] = None
     marca: Optional[str] = None
     condicao: Optional[str] = None
     polegadas: Optional[str] = None
@@ -198,6 +206,7 @@ class MonitorAd(BaseModel):
             data_publicacao=datetime.fromtimestamp(raw["date"]),
             municipio=loc.get("municipality"),
             bairro=loc.get("neighbourhood"),
+            uf=_normaliza_uf(loc.get("uf")),
             marca=_recupera_marca(props.get("info_monitors_brand"), titulo),
             condicao=props.get("info_monitors_condition"),
             polegadas=props.get("info_monitors_inches"),
@@ -260,6 +269,7 @@ class IphoneAd(BaseModel):
     data_publicacao: datetime
     municipio: Optional[str] = None
     bairro: Optional[str] = None
+    uf: Optional[str] = None
     marca: Optional[str] = "Apple"
     condicao: Optional[str] = None
     modelo: Optional[str] = None
@@ -277,10 +287,14 @@ class IphoneAd(BaseModel):
 
     @property
     def grupo(self) -> str:
+        """Inclui a UF no início -- ao contrário de monitor/computador
+        (sempre ES), iPhone roda em múltiplas regiões na mesma execução do
+        scraper, e preço varia por estado. `grupo` é a chave de
+        comparabilidade de common/stats.py: sem a UF aqui, um iPhone de SP
+        competiria pela mesma mediana que um do ES."""
         modelo = self.modelo or "iPhone (modelo?)"
-        if self.armazenamento_gb:
-            return f"{modelo} · {self.armazenamento_gb}GB"
-        return modelo
+        sufixo = f" · {self.armazenamento_gb}GB" if self.armazenamento_gb else ""
+        return f"{self.uf or '?'} · {modelo}{sufixo}"
 
     @classmethod
     def from_olx_json(cls, raw: dict) -> "IphoneAd":
@@ -301,6 +315,7 @@ class IphoneAd(BaseModel):
             data_publicacao=datetime.fromtimestamp(raw["date"]),
             municipio=loc.get("municipality"),
             bairro=loc.get("neighbourhood"),
+            uf=_normaliza_uf(loc.get("uf")),
             marca=props.get("electronics_brand") or "Apple",
             condicao=props.get("electronics_condition"),
             modelo=_normaliza_modelo_iphone(props.get("electronics_model"), titulo),
@@ -323,6 +338,7 @@ class ComputadorAd(BaseModel):
     data_publicacao: datetime
     municipio: Optional[str] = None
     bairro: Optional[str] = None
+    uf: Optional[str] = None
     marca: Optional[str] = None
     condicao: Optional[str] = None
     cpu_marca: Optional[str] = None
@@ -372,6 +388,7 @@ class ComputadorAd(BaseModel):
             data_publicacao=datetime.fromtimestamp(raw["date"]),
             municipio=loc.get("municipality"),
             bairro=loc.get("neighbourhood"),
+            uf=_normaliza_uf(loc.get("uf")),
             marca=props.get("info_computer_brand"),
             condicao=props.get("info_computer_condition"),
             cpu_marca=props.get("info_computer_cpu_brand"),

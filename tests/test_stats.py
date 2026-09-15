@@ -350,17 +350,18 @@ def test_avaliar_aplica_piso_minimo_ponta_a_ponta(tmp_path):
                 "preco": p,
                 "modelo": "IPHONE 11",
                 "armazenamento_gb": 64,
+                "uf": "ES",
             }
         )
         for i, p in enumerate(precos, start=1)
     ]
-    storage.upsert_ads(ads)
+    storage.upsert_ads(ads, uf="ES")
 
     from common.stats import avaliar
     # "iPhone 11 64GB" por R$10 de verdade (achado ao vivo) não pode virar notificação
-    assert avaliar(10.0, "iphone", "IPHONE 11 · 64GB", condicao="Usado - Bom") is None
+    assert avaliar(10.0, "iphone", "ES · IPHONE 11 · 64GB", condicao="Usado - Bom") is None
     # preço real dentro da faixa plausível continua avaliado normalmente
-    av = avaliar(700.0, "iphone", "IPHONE 11 · 64GB", condicao="Usado - Bom")
+    av = avaliar(700.0, "iphone", "ES · IPHONE 11 · 64GB", condicao="Usado - Bom")
     assert av is not None
     assert av.eh_oportunidade is True
 

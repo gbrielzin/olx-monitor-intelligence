@@ -11,7 +11,21 @@ teste local ou CI), só que com notificação do Telegram desativada até
 as credenciais serem preenchidas. Ver notifier.py.
 """
 
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Regiao(BaseModel):
+    """Um estado onde o scraper de iPhone roda. `publico` é só documentação
+    humana no .env (pra lembrar qual grupo é pessoal vs. compartilhado) --
+    nenhum código ramifica por ele: a região pessoal padrão (ES) já usa
+    `chat_id=telegram_chat_id`, então rotear por `chat_id` direto já dá o
+    resultado certo sem checar `publico`."""
+
+    uf: str
+    nome: str
+    chat_id: str
+    publico: bool = True
 
 
 class Settings(BaseSettings):
@@ -25,12 +39,29 @@ class Settings(BaseSettings):
 
     # --- Alvo da coleta ---
     # Nome ficou de quando só existia uma categoria -- é a busca de
-    # monitor, especificamente (ver iphone_search_url abaixo). Não
-    # renomeado pra não quebrar quem já tem OLX_SEARCH_URL customizado
-    # no .env.
+    # monitor, especificamente. Não renomeado pra não quebrar quem já tem
+    # OLX_SEARCH_URL customizado no .env. monitor/computador pararam de
+    # ser agendados (mercado se mostrou ineficaz) -- URLs ficam aqui só
+    # porque o código ainda existe (scraper/main.py:rodar_coleta_monitor/
+    # rodar_coleta_computador), caso sejam reativados algum dia.
     olx_search_url: str = "https://www.olx.com.br/informatica/monitores/estado-es?q=monitor"
-    iphone_search_url: str = "https://www.olx.com.br/estado-es?q=iphone"
     computador_search_url: str = "https://www.olx.com.br/estado-es?q=computador%20completo"
+
+    # --- iPhone: roda em N regiões (estados) na mesma execução, cada uma
+    # podendo ter seu próprio grupo do Telegram. `{uf}` no template vira a
+    # sigla em minúsculo de cada região (ver Regiao.uf). Sem IPHONE_REGIOES
+    # no .env, cai no default abaixo (model_validator) -- só a região
+    # pessoal do usuário (ES), no chat pessoal, comportamento idêntico ao
+    # de antes desta configuração existir. Pra adicionar um estado novo:
+    # IPHONE_REGIOES='[{"uf":"ES","nome":"Espírito Santo","chat_id":"...","publico":false},
+    #                   {"uf":"SP","nome":"São Paulo","chat_id":"...","publico":true}]'
+    iphone_search_url_template: str = "https://www.olx.com.br/estado-{uf}?q=iphone"
+    iphone_regioes: list[Regiao] = Field(default_factory=list)
+    # Delay entre a rodada de uma região de iPhone e a próxima, na mesma
+    # execução -- mesmo espírito do delay entre páginas (fetcher/main.py):
+    # scraper deliberadamente discreto, não maximiza cobertura simultânea.
+    intervalo_entre_regioes_segundos: float = 2.0
+
     scrape_interval_minutes: int = 12
     # 10 = até 500 anúncios/categoria/rodada. Era 5 (250) -- o banco mostrava
     # a MESMA contagem exata (250) em toda rodada nas 3 categorias, sinal de
@@ -97,19 +128,32 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     # claude-opus-5 é o modelo mais caro da Anthropic -- ajuste aqui pra um
     # mais barato (ex: claude-haiku-4-5) depois de ver o custo real por
-    # rodada (3 categorias x só os anúncios novos, não o catálogo inteiro).
+    # rodada (só os anúncios novos de cada região, não o catálogo inteiro).
     ia_modelo: str = "claude-opus-5"
 
     # --- Resumo diário agentic (opcional, custa 1 chamada de IA por dia) ---
-    # Junta oportunidades ativas + tendência de preço das 3 categorias num
-    # panorama, pede pro LLM escrever um resumo corrido e manda por Telegram
-    # de manhã -- ver scraper/resumo_diario.py. Reaproveita
-    # anthropic_api_key/ia_modelo acima. Desativado por padrão.
+    # Junta oportunidades ativas + tendência de preço de iPhone (todas as
+    # regiões) num panorama, pede pro LLM escrever um resumo corrido e manda
+    # por Telegram de manhã, só pro chat pessoal (não replica por região) --
+    # ver scraper/resumo_diario.py. Reaproveita anthropic_api_key/ia_modelo
+    # acima. Desativado por padrão.
     resumo_diario_ativo: bool = False
     resumo_diario_hora_utc: int = 11  # ~8h em Vitória-ES (UTC-3)
 
     # --- Banco de dados ---
     db_path: str = "/data/olx_monitor.db"
+
+    @model_validator(mode="after")
+    def _default_iphone_regiao_pessoal(self) -> "Settings":
+        """Sem IPHONE_REGIOES no .env, roda só a região pessoal (ES) no
+        chat pessoal -- precisa ser um validator (não um default de campo)
+        porque depende de `telegram_chat_id`, outro campo desta mesma
+        classe, só resolvido depois que o .env é lido."""
+        if not self.iphone_regioes:
+            self.iphone_regioes = [
+                Regiao(uf="ES", nome="Espírito Santo", chat_id=self.telegram_chat_id, publico=False)
+            ]
+        return self
 
 
 settings = Settings()

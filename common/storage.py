@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS anuncios (
     data_publicacao TEXT NOT NULL,
     municipio TEXT,
     bairro TEXT,
+    uf TEXT,
     marca TEXT,
     condicao TEXT,
     -- specs de monitor
@@ -100,6 +101,7 @@ CREATE TABLE IF NOT EXISTS coletas (
     coletado_em TEXT NOT NULL,
     plataforma TEXT NOT NULL DEFAULT 'olx',
     categoria TEXT NOT NULL DEFAULT 'monitor',
+    uf TEXT,
     total_anuncios INTEGER NOT NULL,
     novos INTEGER NOT NULL,
     quedas_preco INTEGER NOT NULL,
@@ -162,7 +164,7 @@ CREATE TABLE IF NOT EXISTS auditoria_ia (
 
 _COLUNAS_ANUNCIO = (
     "listing_id, plataforma, categoria, grupo, titulo, preco, preco_antigo, url, data_publicacao, "
-    "municipio, bairro, marca, condicao, polegadas, resolucao_max, faixa_hz, "
+    "municipio, bairro, uf, marca, condicao, polegadas, resolucao_max, faixa_hz, "
     "hz_exato, tipo_tela, tipo_monitor, curvo, modelo, armazenamento_gb, cor, saude_bateria, "
     "cpu_marca, cpu_modelo, ram_gb, inclui_monitor, "
     "vendedor_nome, vendedor_nota"
@@ -187,6 +189,7 @@ def init_db() -> None:
         _migrar_schema_legado_se_necessario(conn)
         _adiciona_multi_categoria_se_necessario(conn)
         _adiciona_campos_computador_se_necessario(conn)
+        _adiciona_uf_se_necessario(conn)
         conn.executescript(_SCHEMA)
 
 
@@ -283,7 +286,8 @@ def _backfill_de_legado(conn: sqlite3.Connection) -> None:
         }
 
     # Todo o schema legado é de antes de existir categoria -- é tudo
-    # monitor, sempre.
+    # monitor, sempre, e de antes do scraper rodar em mais de um estado --
+    # é tudo ES, sempre.
     anuncios_rows = []
     for (listing_id, plataforma), d in estado.items():
         ativo = 1 if d["ultimo_visto_em"] == ultima_coleta_global else 0
@@ -291,7 +295,7 @@ def _backfill_de_legado(conn: sqlite3.Connection) -> None:
         grupo = f"{d['marca'] or '?'} · {d['tipo_monitor'] or '?'}"
         anuncios_rows.append((
             listing_id, plataforma, "monitor", grupo, d["titulo"], d["preco"], d["preco_antigo"],
-            d["url"], d["data_publicacao"], d["municipio"], d["bairro"], d["marca"], d["condicao"],
+            d["url"], d["data_publicacao"], d["municipio"], d["bairro"], "ES", d["marca"], d["condicao"],
             d["polegadas"], d["resolucao_max"], d["faixa_hz"], d["hz_exato"], d["tipo_tela"],
             d["tipo_monitor"], d["curvo"], None, None, None, None, None, None, None, 0,
             d["vendedor_nome"], d["vendedor_nota"],
@@ -302,7 +306,7 @@ def _backfill_de_legado(conn: sqlite3.Connection) -> None:
         f"""
         INSERT INTO anuncios (
             {_COLUNAS_ANUNCIO}, primeiro_visto_em, ultimo_visto_em, ativo, removido_em
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         anuncios_rows,
     )
@@ -327,8 +331,8 @@ def _backfill_de_legado(conn: sqlite3.Connection) -> None:
     conn.executemany(
         """
         INSERT OR IGNORE INTO coletas
-            (coletado_em, plataforma, categoria, total_anuncios, novos, quedas_preco, com_preco)
-        VALUES (?, ?, 'monitor', ?, 0, 0, ?)
+            (coletado_em, plataforma, categoria, uf, total_anuncios, novos, quedas_preco, com_preco)
+        VALUES (?, ?, 'monitor', 'ES', ?, 0, 0, ?)
         """,
         coletas_rows,
     )
@@ -392,6 +396,48 @@ def _adiciona_campos_computador_se_necessario(conn: sqlite3.Connection) -> None:
     logger.warning("Colunas de computador adicionadas.")
 
 
+def _adiciona_uf_se_necessario(conn: sqlite3.Connection) -> None:
+    """Mesmo padrão das migrações acima, pra quando o scraper passou a
+    rodar iPhone em mais de um estado. Backfill 'ES' é correto pra todo
+    dado existente -- até aqui o scraper só rodou no Espírito Santo.
+
+    Além da coluna, corrige o `grupo` de iPhone já salvo: a partir desta
+    versão `IphoneAd.grupo` passa a incluir a UF como prefixo (ver
+    common/schema.py) -- sem esse backfill, um iPhone salvo antes desta
+    migração ficaria com grupo no formato antigo (sem UF) até ser
+    re-raspado, o que faria dashboard/medianas_diarias mostrarem o
+    formato velho e o novo misturados por um tempo. Idempotente: se `uf`
+    já existe em `anuncios`, não faz nada."""
+    existe = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='anuncios'"
+    ).fetchone()
+    if existe is None:
+        return
+    colunas = {r[1] for r in conn.execute("PRAGMA table_info(anuncios)").fetchall()}
+    if "uf" in colunas:
+        return
+
+    logger.warning("Adicionando coluna uf (região) e corrigindo grupo de iPhone já salvo...")
+    conn.execute("ALTER TABLE anuncios ADD COLUMN uf TEXT")
+    conn.execute("UPDATE anuncios SET uf = 'ES'")
+    conn.execute("UPDATE anuncios SET grupo = 'ES · ' || grupo WHERE categoria = 'iphone'")
+
+    # medianas_diarias só existe via CREATE TABLE IF NOT EXISTS no _SCHEMA
+    # (nunca precisou de ALTER) -- num banco que ainda não rodou
+    # executescript nem uma vez, ela pode não existir ainda aqui.
+    tem_medianas = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='medianas_diarias'"
+    ).fetchone()
+    if tem_medianas:
+        conn.execute("UPDATE medianas_diarias SET grupo = 'ES · ' || grupo WHERE categoria = 'iphone'")
+
+    colunas_coletas = {r[1] for r in conn.execute("PRAGMA table_info(coletas)").fetchall()}
+    if "uf" not in colunas_coletas:
+        conn.execute("ALTER TABLE coletas ADD COLUMN uf TEXT")
+        conn.execute("UPDATE coletas SET uf = 'ES'")
+    logger.warning("Coluna uf adicionada; grupo de iPhone corrigido pra incluir região.")
+
+
 @dataclass
 class ColetaResultado:
     """Efeito de uma rodada sobre o estado salvo — os dois gatilhos de
@@ -402,21 +448,32 @@ class ColetaResultado:
     quedas: dict[int, tuple[float, float]] = field(default_factory=dict)  # id -> (novo, anterior)
 
 
-def snapshot_estado(plataforma: str = "olx", categoria: str = "monitor") -> dict[int, tuple[float | None, bool]]:
+def snapshot_estado(
+    plataforma: str = "olx", categoria: str = "monitor", uf: str | None = None
+) -> dict[int, tuple[float | None, bool]]:
     """listing_id -> (preco atual, ativo) de tudo que já foi visto NESSA
-    categoria — usado por upsert_ads pra decidir o que é novo/queda/sumiço
-    antes de sobrescrever o estado. Filtrar por categoria aqui não é
+    categoria+região — usado por upsert_ads pra decidir o que é novo/queda/
+    sumiço antes de sobrescrever o estado. Filtrar por categoria aqui não é
     opcional: sem isso, rodar a coleta de iPhone marcaria todo monitor
-    ativo como "sumido" (não veio nesta rodada de iPhone) e vice-versa."""
+    ativo como "sumido" (não veio nesta rodada de iPhone) e vice-versa.
+    Desde que iPhone passou a rodar em múltiplas regiões na mesma execução,
+    o mesmo vale pra `uf`: sem filtrar por região, a rodada de um estado
+    marcaria como sumido tudo que é de outro estado.
+
+    `uf IS ?` (não `uf = ?`) é proposital: em SQL, `coluna = NULL` nunca é
+    verdadeiro, nem quando a coluna também é NULL -- com `=`, toda chamada
+    com `uf=None` (monitor/computador, e qualquer teste que não passe uf)
+    veria `estado_antes` sempre vazio, quebrando a detecção de queda de
+    preço e sumiço. `IS` trata NULL corretamente."""
     with get_connection() as conn:
         cursor = conn.execute(
-            "SELECT listing_id, preco, ativo FROM anuncios WHERE plataforma = ? AND categoria = ?",
-            (plataforma, categoria),
+            "SELECT listing_id, preco, ativo FROM anuncios WHERE plataforma = ? AND categoria = ? AND uf IS ?",
+            (plataforma, categoria, uf),
         )
         return {r[0]: (r[1], bool(r[2])) for r in cursor.fetchall()}
 
 
-def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
+def upsert_ads(ads: list, plataforma: str = "olx", uf: str | None = None) -> ColetaResultado:
     """Grava o estado mais recente de cada anúncio — 1 linha por
     (listing_id, plataforma) em `anuncios`, sempre. Preço só vira linha
     nova em `historico_precos` quando CAI em relação ao valor salvo
@@ -429,6 +486,14 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
     preco, url, ...) serve, os campos específicos de categoria (hz_exato,
     modelo, ...) são lidos com getattr() porque só existem num dos dois.
 
+    `uf` é a região desta rodada (ex: "ES", "SP") — passada explicitamente
+    por quem chama (`scraper/main.py`), não derivada de `ads[0].uf`: UF é
+    dado vindo do JSON da OLX (pode faltar num anúncio isolado do lote),
+    diferente de `categoria`, que é atributo fixo da classe e sempre
+    uniforme no lote. Usada pra escopar `snapshot_estado` e o registro em
+    `coletas` — sem isso, uma rodada de iPhone de um estado marcaria como
+    "sumido" tudo que é de outro estado processado antes na mesma execução.
+
     Um anúncio que suma desta rodada (estava ativo, não veio na lista)
     é marcado `ativo=0` — deixa de contar na mediana de `common/stats.py`
     e fica disponível pra análise de 'tempo até sumir do ar'.
@@ -438,7 +503,7 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
 
     categoria = ads[0].categoria
     momento = ads[0].coletado_em.isoformat()
-    estado_antes = snapshot_estado(plataforma, categoria)
+    estado_antes = snapshot_estado(plataforma, categoria, uf)
     resultado = ColetaResultado()
 
     upsert_rows = []
@@ -463,7 +528,7 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
 
         upsert_rows.append((
             a.listing_id, plataforma, a.categoria, a.grupo, a.titulo, a.preco, a.preco_antigo, a.url,
-            a.data_publicacao.isoformat(), a.municipio, a.bairro, a.marca, a.condicao,
+            a.data_publicacao.isoformat(), a.municipio, a.bairro, a.uf, a.marca, a.condicao,
             getattr(a, "polegadas", None), getattr(a, "resolucao_max", None), getattr(a, "faixa_hz", None),
             getattr(a, "hz_exato", None), getattr(a, "tipo_tela", None), getattr(a, "tipo_monitor", None),
             int(getattr(a, "curvo", False)),
@@ -482,7 +547,7 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
             f"""
             INSERT INTO anuncios (
                 {_COLUNAS_ANUNCIO}, primeiro_visto_em, ultimo_visto_em, ativo, removido_em
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NULL)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NULL)
             ON CONFLICT (listing_id, plataforma) DO UPDATE SET
                 categoria=excluded.categoria,
                 grupo=excluded.grupo,
@@ -493,6 +558,7 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
                 data_publicacao=excluded.data_publicacao,
                 municipio=excluded.municipio,
                 bairro=excluded.bairro,
+                uf=excluded.uf,
                 marca=excluded.marca,
                 condicao=excluded.condicao,
                 polegadas=excluded.polegadas,
@@ -541,10 +607,10 @@ def upsert_ads(ads: list, plataforma: str = "olx") -> ColetaResultado:
 
         conn.execute(
             """
-            INSERT INTO coletas (coletado_em, plataforma, categoria, total_anuncios, novos, quedas_preco, com_preco)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO coletas (coletado_em, plataforma, categoria, uf, total_anuncios, novos, quedas_preco, com_preco)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (momento, plataforma, categoria, len(ads), len(resultado.novos), len(resultado.quedas), com_preco),
+            (momento, plataforma, categoria, uf, len(ads), len(resultado.novos), len(resultado.quedas), com_preco),
         )
 
     return resultado
@@ -565,20 +631,28 @@ def eh_minimo_historico(listing_id: int, preco: float, plataforma: str = "olx") 
     return minimo is not None and preco <= minimo
 
 
-def contagem_media_ultimas_coletas(plataforma: str = "olx", categoria: str = "monitor", n: int = 5) -> float | None:
-    """Média de anúncios por rodada nas últimas N coletas DESSA categoria
-    — usada pelo checkpoint de sanidade pra flagrar quedas abruptas.
-    Sem o filtro de categoria, misturar contagens de monitor e iPhone na
-    mesma média faria o checkpoint comparar coisas diferentes."""
+def contagem_media_ultimas_coletas(
+    plataforma: str = "olx", categoria: str = "monitor", *, uf: str, n: int = 5
+) -> float | None:
+    """Média de anúncios por rodada nas últimas N coletas DESSA
+    categoria+região — usada pelo checkpoint de sanidade pra flagrar quedas
+    abruptas. Sem o filtro de categoria, misturar contagens de monitor e
+    iPhone na mesma média faria o checkpoint comparar coisas diferentes;
+    desde que iPhone passou a rodar em múltiplos estados, o mesmo vale pra
+    `uf` — sem filtrar por região, a média mistura rodadas de estados
+    grandes e pequenos, disparando falso alarme no pequeno (ou mascarando
+    queda real no grande). `uf` é obrigatório (keyword-only) porque toda
+    rodada tem uma região real hoje, inclusive monitor/computador (sempre
+    "ES")."""
     with get_connection() as conn:
         cursor = conn.execute(
             """
             SELECT total_anuncios FROM coletas
-            WHERE plataforma = ? AND categoria = ?
+            WHERE plataforma = ? AND categoria = ? AND uf = ?
             ORDER BY coletado_em DESC
             LIMIT ?
             """,
-            (plataforma, categoria, n),
+            (plataforma, categoria, uf, n),
         )
         contagens = [r[0] for r in cursor.fetchall()]
     if not contagens:

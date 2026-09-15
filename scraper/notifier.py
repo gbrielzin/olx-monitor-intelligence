@@ -26,8 +26,14 @@ from common.config import settings
 logger = logging.getLogger(__name__)
 
 
-def enviar_telegram(mensagem: str) -> None:
-    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+def enviar_telegram(mensagem: str, chat_id: str | None = None) -> None:
+    """`chat_id` opcional pra rotear pro grupo de uma região específica
+    (oportunidade de iPhone de um estado com grupo próprio) — sem ele, cai
+    no chat pessoal do operador (`settings.telegram_chat_id`), que é onde
+    TODO alerta de erro/sanidade/scraper-quebrado deve ir sempre, nunca
+    num grupo público."""
+    destino = chat_id or settings.telegram_chat_id
+    if not settings.telegram_bot_token or not destino:
         logger.warning("Telegram não configurado no .env — notificação pulada: %s", mensagem[:80])
         return
 
@@ -36,7 +42,7 @@ def enviar_telegram(mensagem: str) -> None:
         resp = requests.post(
             url,
             json={
-                "chat_id": settings.telegram_chat_id,
+                "chat_id": destino,
                 "text": mensagem,
             },
             timeout=10,

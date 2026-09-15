@@ -5,6 +5,11 @@ na OLX (Grande Vitória/ES), detecta oportunidades abaixo da mediana de
 mercado e avisa por Telegram, com um dashboard Streamlit pra
 acompanhar tendência de preço por modelo.
 
+> Avaliando este projeto pelo ângulo de **análise de dados** (pipeline,
+> qualidade, indicadores, decisão orientada a dado)? Ver
+> [`CASE_DATA_ANALYTICS.md`](CASE_DATA_ANALYTICS.md). Pra profundidade
+> técnica de backend/infra, [`OLX_DEEP_DIVE.md`](OLX_DEEP_DIVE.md).
+
 ## Como rodar
 
 ```bash

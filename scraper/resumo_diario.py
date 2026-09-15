@@ -1,7 +1,8 @@
-"""Resumo diário agentic: 1x/dia, junta oportunidades ativas, tendência de
-preço (quedas reais nas últimas 24h) e sugestão de por onde negociar
-primeiro das 3 categorias, e pede pro LLM escrever um resumo corrido --
-manda por Telegram.
+"""Resumo diário agentic: 1x/dia, junta oportunidades ativas de iPhone
+(todas as regiões configuradas) e tendência de preço (quedas reais nas
+últimas 24h), e sugestão de por onde negociar primeiro, e pede pro LLM
+escrever um resumo corrido -- manda por Telegram, só pro chat pessoal
+(não replica por região, é ferramenta de operador).
 
 Diferença de auditoria_ia.py: lá o LLM julga UM anúncio por vez, sem
 síntese nenhuma. Aqui o LLM recebe o panorama do dia inteiro e decide
@@ -26,7 +27,7 @@ from notifier import enviar_telegram
 
 logger = logging.getLogger(__name__)
 
-_CATEGORIAS = ("monitor", "iphone", "computador")
+_CATEGORIAS = ("iphone",)  # monitor/computador pararam de ser coletados
 
 
 def _ativos_por_categoria(categoria: str) -> list[dict]:
@@ -52,12 +53,16 @@ def _quedas_ultimas_24h(categoria: str) -> int:
 
 
 def _panorama() -> dict:
-    """Monta o panorama do dia pras 3 categorias -- oportunidades ativas
-    ordenadas por margem, e quantas quedas de preço reais bateram nas
-    últimas 24h. Reaproveita a mesma régua de oportunidade/margem de
-    common/stats.py (medianas_todos_grupos + avaliar_preco), do jeito que
-    o dashboard já faz em `_com_avaliacao` -- sem depender de pandas aqui
-    (scraper não tem pandas nas dependências)."""
+    """Monta o panorama do dia (hoje só iPhone, mas mantém o loop por
+    categoria -- menor diff se outra categoria voltar a ser coletada) --
+    oportunidades ativas de TODAS as regiões configuradas juntas, ordenadas
+    por margem (o `grupo` de cada anúncio já vem prefixado com a UF, ver
+    common/schema.py, então o panorama naturalmente reflete cada região
+    sem precisar filtrar por ela aqui), e quantas quedas de preço reais
+    bateram nas últimas 24h. Reaproveita a mesma régua de oportunidade/
+    margem de common/stats.py (medianas_todos_grupos + avaliar_preco), do
+    jeito que o dashboard já faz em `_com_avaliacao` -- sem depender de
+    pandas aqui (scraper não tem pandas nas dependências)."""
     medianas = medianas_todos_grupos()
     panorama = {}
     for categoria in _CATEGORIAS:
@@ -102,16 +107,16 @@ def _monta_prompt(panorama: dict) -> str:
 
 
 _SYSTEM = (
-    "Você escreve o resumo diário de um sistema pessoal de revenda que monitora "
-    "OLX (monitor gamer, iPhone, computador completo) na Grande Vitória/ES. Quem "
-    "lê já conhece o sistema -- não explique o que é, só resuma o dia. Combine as "
-    "3 categorias num texto corrido curto (poucos parágrafos), em português, sem "
-    "markdown (vai direto pro Telegram sem formatação). Estrutura sugerida: "
-    "quantas oportunidades no total e onde estão concentradas, como está a "
-    "tendência de preço (quedas reais nas últimas 24h), e por qual anúncio "
-    "específico começar a negociar hoje e por quê (cite título, preço e margem). "
-    "Se não houver oportunidade nenhuma numa categoria, diga isso em 1 frase, sem "
-    "inventar dado. Termine com 1 frase prática do que fazer primeiro."
+    "Você escreve o resumo diário de um sistema de revenda que monitora iPhone na "
+    "OLX em múltiplos estados. Quem lê já conhece o sistema -- não explique o que "
+    "é, só resuma o dia. Texto corrido curto (poucos parágrafos), em português, "
+    "sem markdown (vai direto pro Telegram sem formatação). Estrutura sugerida: "
+    "quantas oportunidades no total e em quais cidades/regiões estão concentradas "
+    "(cada oportunidade vem com o município do anúncio), como está a tendência de "
+    "preço (quedas reais nas últimas 24h), e por qual anúncio específico começar a "
+    "negociar hoje e por quê (cite título, preço, margem e município). Se não "
+    "houver oportunidade nenhuma, diga isso em 1 frase, sem inventar dado. Termine "
+    "com 1 frase prática do que fazer primeiro."
 )
 
 

@@ -131,6 +131,18 @@ def test_marca_curta_nao_casa_no_meio_de_outra_palavra():
     assert MonitorAd.from_olx_json(raw).marca is None
 
 
+def test_monitor_uf_e_lida_do_json():
+    raw = {
+        "listId": 108,
+        "subject": "Monitor LG 24 polegadas",
+        "url": "https://x/108",
+        "date": 1787000000,
+        "locationDetails": {"municipality": "Vitoria", "uf": "ES"},
+        "properties": [],
+    }
+    assert MonitorAd.from_olx_json(raw).uf == "ES"
+
+
 # --- IphoneAd -- estrutura real da OLX (categoria "Celulares e
 # Smartphones", id 3060), inspecionada ao vivo antes de escrever o parser.
 
@@ -174,7 +186,21 @@ def test_iphone_from_olx_json_le_specs_reais():
 
 def test_iphone_grupo_combina_modelo_e_armazenamento():
     ad = IphoneAd.from_olx_json(_raw_iphone())
-    assert ad.grupo == "IPHONE 11 · 128GB"
+    assert ad.grupo == "ES · IPHONE 11 · 128GB"
+
+
+def test_iphone_uf_e_lida_do_json_e_normalizada_maiuscula():
+    ad = IphoneAd.from_olx_json(_raw_iphone(locationDetails={"municipality": "SP", "uf": "sp"}))
+    assert ad.uf == "SP"
+    assert ad.grupo == "SP · IPHONE 11 · 128GB"
+
+
+def test_iphone_grupo_sem_uf_no_json_usa_interrogacao():
+    raw = _raw_iphone()
+    raw["locationDetails"] = {"municipality": "Cariacica"}  # sem "uf"
+    ad = IphoneAd.from_olx_json(raw)
+    assert ad.uf is None
+    assert ad.grupo == "? · IPHONE 11 · 128GB"
 
 
 def test_iphone_armazenamento_em_tb_normaliza_pra_gb():
@@ -247,6 +273,12 @@ def test_computador_from_olx_json_le_specs_reais():
 
 def test_computador_grupo_combina_cpu_e_ram():
     ad = ComputadorAd.from_olx_json(_raw_computador())
+    assert ad.grupo == "Intel Core i5 · 8GB RAM"  # computador nunca leva UF no grupo -- categoria congelada em ES
+
+
+def test_computador_uf_e_lida_do_json_mas_nao_entra_no_grupo():
+    ad = ComputadorAd.from_olx_json(_raw_computador())
+    assert ad.uf == "ES"
     assert ad.grupo == "Intel Core i5 · 8GB RAM"
 
 

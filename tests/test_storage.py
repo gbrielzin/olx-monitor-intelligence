@@ -28,7 +28,7 @@ def _ad(listing_id: int, coletado_em: datetime, preco: float = 100.0, url: str |
     )
 
 
-def _ad_iphone(listing_id: int, coletado_em: datetime, preco: float = 1000.0):
+def _ad_iphone(listing_id: int, coletado_em: datetime, preco: float = 1000.0, uf: str = "ES"):
     return IphoneAd.model_validate(
         {
             "listing_id": listing_id,
@@ -38,6 +38,7 @@ def _ad_iphone(listing_id: int, coletado_em: datetime, preco: float = 1000.0):
             "preco": preco,
             "modelo": "IPHONE 13",
             "armazenamento_gb": 128,
+            "uf": uf,
             "coletado_em": coletado_em,
         }
     )
@@ -226,9 +227,9 @@ def test_contagem_media_ultimas_coletas_usa_tabela_coletas(tmp_path):
     base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     for i in range(3):
         coleta = base.replace(minute=i * 12)
-        storage.upsert_ads([_ad(1, coleta), _ad(2, coleta), _ad(3, coleta)])
+        storage.upsert_ads([_ad(1, coleta), _ad(2, coleta), _ad(3, coleta)], uf="ES")
 
-    media = storage.contagem_media_ultimas_coletas(n=5)
+    media = storage.contagem_media_ultimas_coletas(n=5, uf="ES")
     assert media == 3.0
 
 
@@ -349,14 +350,15 @@ def test_eh_minimo_historico_false_quando_ja_esteve_mais_barato(tmp_path):
 def test_upsert_grava_categoria_e_grupo_de_iphone(tmp_path):
     storage = _reload_storage(tmp_path, "teste_iphone1.db")
     storage.init_db()
-    storage.upsert_ads([_ad_iphone(1, datetime.now(timezone.utc))])
+    storage.upsert_ads([_ad_iphone(1, datetime.now(timezone.utc))], uf="ES")
 
     with storage.get_connection() as conn:
-        categoria, grupo, modelo, armazenamento = conn.execute(
-            "SELECT categoria, grupo, modelo, armazenamento_gb FROM anuncios WHERE listing_id = 1"
+        categoria, grupo, uf, modelo, armazenamento = conn.execute(
+            "SELECT categoria, grupo, uf, modelo, armazenamento_gb FROM anuncios WHERE listing_id = 1"
         ).fetchone()
     assert categoria == "iphone"
-    assert grupo == "IPHONE 13 · 128GB"
+    assert grupo == "ES · IPHONE 13 · 128GB"
+    assert uf == "ES"
     assert modelo == "IPHONE 13"
     assert armazenamento == 128
 
@@ -372,7 +374,7 @@ def test_coleta_de_uma_categoria_nao_desativa_a_outra(tmp_path):
     c2 = datetime(2026, 1, 1, 12, 12, tzinfo=timezone.utc)
     c3 = datetime(2026, 1, 1, 12, 24, tzinfo=timezone.utc)
     storage.upsert_ads([_ad(1, c1), _ad(2, c1)])  # 2 monitores ativos
-    storage.upsert_ads([_ad_iphone(101, c2)])  # rodada de iPhone, sem nenhum monitor
+    storage.upsert_ads([_ad_iphone(101, c2)], uf="ES")  # rodada de iPhone, sem nenhum monitor
 
     with storage.get_connection() as conn:
         ativo_monitor_1 = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 1").fetchone()[0]
@@ -390,6 +392,37 @@ def test_coleta_de_uma_categoria_nao_desativa_a_outra(tmp_path):
     assert ainda_ativo_iphone == 1
 
 
+def test_coleta_de_uma_regiao_de_iphone_nao_desativa_outra_regiao(tmp_path):
+    """Regressão direta do bug de 'sumiço' cruzado entre regiões: rodar
+    iPhone de SP na mesma execução não pode marcar os iPhones do ES (região
+    processada antes, no mesmo ciclo) como sumidos só porque não vieram no
+    lote de SP -- mesmo risco que categoria já resolvia, agora pra UF."""
+    storage = _reload_storage(tmp_path, "teste_isolamento_regiao.db")
+    storage.init_db()
+
+    c1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    c2 = datetime(2026, 1, 1, 12, 2, tzinfo=timezone.utc)  # mesmo ciclo, região seguinte
+
+    storage.upsert_ads([_ad_iphone(1, c1, uf="ES"), _ad_iphone(2, c1, uf="ES")], uf="ES")
+    storage.upsert_ads([_ad_iphone(101, c2, uf="SP")], uf="SP")  # rodada de SP, sem nenhum iPhone de ES
+
+    with storage.get_connection() as conn:
+        ativo_es_1 = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 1").fetchone()[0]
+        ativo_es_2 = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 2").fetchone()[0]
+        ativo_sp = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 101").fetchone()[0]
+
+    assert ativo_es_1 == 1  # não pode ter sido marcado como sumido pela rodada de SP
+    assert ativo_es_2 == 1
+    assert ativo_sp == 1
+
+    # e o inverso: uma rodada de ES sem esse SP não pode desativá-lo
+    c3 = datetime(2026, 1, 1, 12, 4, tzinfo=timezone.utc)
+    storage.upsert_ads([_ad_iphone(1, c3, uf="ES"), _ad_iphone(2, c3, uf="ES")], uf="ES")
+    with storage.get_connection() as conn:
+        ainda_ativo_sp = conn.execute("SELECT ativo FROM anuncios WHERE listing_id = 101").fetchone()[0]
+    assert ainda_ativo_sp == 1
+
+
 def test_mediana_de_uma_categoria_nao_mistura_com_a_outra(tmp_path):
     storage = _reload_storage(tmp_path, "teste_isolamento2.db")
     storage.init_db()
@@ -398,12 +431,44 @@ def test_mediana_de_uma_categoria_nao_mistura_com_a_outra(tmp_path):
     monitores = [_ad(i, agora, preco=p) for i, p in enumerate([300, 400, 500, 600, 700], start=1)]
     iphones = [_ad_iphone(i, agora, preco=p) for i, p in enumerate([2000, 2100, 2200, 2300, 2400], start=101)]
     storage.upsert_ads(monitores)
-    storage.upsert_ads(iphones)
+    storage.upsert_ads(iphones, uf="ES")
 
     from common.stats import medianas_todos_grupos
     medianas = medianas_todos_grupos()
     assert medianas[("monitor", "AOC · Monitor Gamer")] == 500.0
-    assert medianas[("iphone", "IPHONE 13 · 128GB")] == 2200.0
+    assert medianas[("iphone", "ES · IPHONE 13 · 128GB")] == 2200.0
+
+
+def test_mediana_de_iphone_nao_mistura_estados_diferentes(tmp_path):
+    """A prova central da arquitetura multi-região: mesmo modelo lógico
+    (IPHONE 13 · 128GB) em dois estados não pode compartilhar mediana --
+    um preço de SP não pode inflar/afundar a decisão de oportunidade de um
+    anúncio do ES, e vice-versa. `IphoneAd.grupo` já embute a UF (ver
+    common/schema.py) -- este teste prova que isso realmente isola as duas
+    medianas, não só que o código roda sem erro."""
+    storage = _reload_storage(tmp_path, "teste_multi_regiao_mediana.db")
+    storage.init_db()
+    # coletado_em diferente entre as duas regiões -- reflete a realidade de
+    # produção (rodadas sequenciais com delay real entre elas, nunca no
+    # mesmo instante) e evita colidir na PK de `coletas`
+    # (coletado_em, plataforma, categoria) -- ver
+    # test_contagem_media_ultimas_coletas_separa_por_uf pro mesmo cuidado.
+    c_es = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    c_sp = datetime(2026, 1, 1, 12, 0, 3, tzinfo=timezone.utc)
+
+    es = [_ad_iphone(i, c_es, preco=p, uf="ES") for i, p in enumerate([2000, 2100, 2200, 2300, 2400], start=1)]
+    sp = [_ad_iphone(i, c_sp, preco=p, uf="SP") for i, p in enumerate([4000, 4100, 4200, 4300, 4400], start=101)]
+    storage.upsert_ads(es, uf="ES")
+    storage.upsert_ads(sp, uf="SP")
+
+    with storage.get_connection() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM anuncios WHERE ativo = 1").fetchone()[0]
+    assert total == 10  # as duas regiões coexistem, nenhuma marcou a outra como sumida
+
+    from common.stats import medianas_todos_grupos
+    medianas = medianas_todos_grupos()
+    assert medianas[("iphone", "ES · IPHONE 13 · 128GB")] == 2200.0
+    assert medianas[("iphone", "SP · IPHONE 13 · 128GB")] == 4200.0
 
 
 def test_contagem_media_ultimas_coletas_separa_por_categoria(tmp_path):
@@ -412,13 +477,37 @@ def test_contagem_media_ultimas_coletas_separa_por_categoria(tmp_path):
     c1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     c2 = datetime(2026, 1, 1, 12, 12, tzinfo=timezone.utc)
 
-    storage.upsert_ads([_ad(i, c1) for i in range(1, 4)])  # 3 monitores
-    storage.upsert_ads([_ad_iphone(i, c1) for i in range(101, 111)])  # 10 iphones
-    storage.upsert_ads([_ad(i, c2) for i in range(1, 4)])
-    storage.upsert_ads([_ad_iphone(i, c2) for i in range(101, 111)])
+    storage.upsert_ads([_ad(i, c1) for i in range(1, 4)], uf="ES")  # 3 monitores
+    storage.upsert_ads([_ad_iphone(i, c1) for i in range(101, 111)], uf="ES")  # 10 iphones
+    storage.upsert_ads([_ad(i, c2) for i in range(1, 4)], uf="ES")
+    storage.upsert_ads([_ad_iphone(i, c2) for i in range(101, 111)], uf="ES")
 
-    assert storage.contagem_media_ultimas_coletas(categoria="monitor") == 3.0
-    assert storage.contagem_media_ultimas_coletas(categoria="iphone") == 10.0
+    assert storage.contagem_media_ultimas_coletas(categoria="monitor", uf="ES") == 3.0
+    assert storage.contagem_media_ultimas_coletas(categoria="iphone", uf="ES") == 10.0
+
+
+def test_contagem_media_ultimas_coletas_separa_por_uf(tmp_path):
+    """Regressão direta do bug de falso alarme de sanidade: uma região
+    pequena (ES, 2 anúncios/rodada) não pode ser comparada contra a média
+    de uma região grande (SP, 20 anúncios/rodada) só porque as duas são
+    'iphone' -- cada `uf` precisa da própria média histórica."""
+    storage = _reload_storage(tmp_path, "teste_contagem_uf.db")
+    storage.init_db()
+    # coletado_em diferente entre ES e SP dentro do mesmo ciclo -- reflete
+    # o delay real entre regiões em produção, e evita colidir na PK de
+    # `coletas` (coletado_em, plataforma, categoria): as duas são 'iphone'.
+    c1_es = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    c1_sp = datetime(2026, 1, 1, 12, 0, 3, tzinfo=timezone.utc)
+    c2_es = datetime(2026, 1, 1, 12, 12, 0, tzinfo=timezone.utc)
+    c2_sp = datetime(2026, 1, 1, 12, 12, 3, tzinfo=timezone.utc)
+
+    storage.upsert_ads([_ad_iphone(i, c1_es, uf="ES") for i in range(1, 3)], uf="ES")  # 2 anúncios
+    storage.upsert_ads([_ad_iphone(i, c1_sp, uf="SP") for i in range(101, 121)], uf="SP")  # 20 anúncios
+    storage.upsert_ads([_ad_iphone(i, c2_es, uf="ES") for i in range(1, 3)], uf="ES")
+    storage.upsert_ads([_ad_iphone(i, c2_sp, uf="SP") for i in range(101, 121)], uf="SP")
+
+    assert storage.contagem_media_ultimas_coletas(categoria="iphone", uf="ES") == 2.0
+    assert storage.contagem_media_ultimas_coletas(categoria="iphone", uf="SP") == 20.0
 
 
 def test_migracao_adiciona_categoria_e_grupo_em_banco_pre_multi_categoria(tmp_path):
@@ -483,6 +572,81 @@ def test_migracao_adiciona_categoria_e_grupo_em_banco_pre_multi_categoria(tmp_pa
     assert total == 2
 
 
+def test_migracao_adiciona_uf_e_corrige_grupo_de_iphone_legado(tmp_path):
+    """Simula o estado do banco de antes da região (uf) existir -- inclusive
+    um iPhone já salvo com `grupo` no formato antigo (sem prefixo de UF,
+    de antes de IphoneAd.grupo passar a incluir a região). init_db()
+    precisa adicionar a coluna `uf` (backfill 'ES', único estado que já
+    rodou) E corrigir o grupo do iPhone legado pro formato novo -- sem
+    tocar no grupo de monitor, que nunca leva UF."""
+    storage = _reload_storage(tmp_path, "teste_migracao_uf.db")
+    agora = datetime.now(timezone.utc)
+    storage.init_db()
+    storage.upsert_ads([_ad(1, agora, preco=500.0)])  # monitor
+    storage.upsert_ads([_ad_iphone(2, agora, preco=1000.0)], uf="ES")  # iphone
+
+    with storage.get_connection() as conn:
+        # força o grupo do iPhone de volta pro formato ANTIGO (sem UF) --
+        # é o estado real que uma instalação em produção teria antes desta
+        # migração existir.
+        conn.execute("UPDATE anuncios SET grupo = 'IPHONE 13 · 128GB' WHERE listing_id = 2")
+        # recria a tabela sem a coluna uf, mesmo truque de
+        # test_migracao_adiciona_categoria_e_grupo_em_banco_pre_multi_categoria,
+        # pra simular um banco de antes dela existir.
+        conn.executescript(
+            """
+            CREATE TABLE anuncios_sem_uf (
+                listing_id INTEGER NOT NULL,
+                plataforma TEXT NOT NULL DEFAULT 'olx',
+                categoria TEXT NOT NULL DEFAULT 'monitor',
+                grupo TEXT NOT NULL DEFAULT '',
+                titulo TEXT NOT NULL,
+                preco REAL, preco_antigo REAL, url TEXT NOT NULL, data_publicacao TEXT NOT NULL,
+                municipio TEXT, bairro TEXT, marca TEXT, condicao TEXT,
+                polegadas TEXT, resolucao_max TEXT, faixa_hz TEXT, hz_exato INTEGER,
+                tipo_tela TEXT, tipo_monitor TEXT, curvo INTEGER NOT NULL DEFAULT 0,
+                modelo TEXT, armazenamento_gb INTEGER, cor TEXT, saude_bateria TEXT,
+                cpu_marca TEXT, cpu_modelo TEXT, ram_gb INTEGER, inclui_monitor INTEGER NOT NULL DEFAULT 0,
+                vendedor_nome TEXT, vendedor_nota REAL,
+                primeiro_visto_em TEXT NOT NULL, ultimo_visto_em TEXT NOT NULL,
+                ativo INTEGER NOT NULL DEFAULT 1, removido_em TEXT,
+                PRIMARY KEY (listing_id, plataforma)
+            );
+            INSERT INTO anuncios_sem_uf
+                (listing_id, plataforma, categoria, grupo, titulo, preco, preco_antigo, url, data_publicacao,
+                 municipio, bairro, marca, condicao, polegadas, resolucao_max, faixa_hz, hz_exato,
+                 tipo_tela, tipo_monitor, curvo, modelo, armazenamento_gb, cor, saude_bateria,
+                 cpu_marca, cpu_modelo, ram_gb, inclui_monitor, vendedor_nome, vendedor_nota,
+                 primeiro_visto_em, ultimo_visto_em, ativo, removido_em)
+            SELECT listing_id, plataforma, categoria, grupo, titulo, preco, preco_antigo, url, data_publicacao,
+                   municipio, bairro, marca, condicao, polegadas, resolucao_max, faixa_hz, hz_exato,
+                   tipo_tela, tipo_monitor, curvo, modelo, armazenamento_gb, cor, saude_bateria,
+                   cpu_marca, cpu_modelo, ram_gb, inclui_monitor, vendedor_nome, vendedor_nota,
+                   primeiro_visto_em, ultimo_visto_em, ativo, removido_em
+            FROM anuncios;
+            DROP TABLE anuncios;
+            ALTER TABLE anuncios_sem_uf RENAME TO anuncios;
+            """
+        )
+
+    storage.init_db()  # dispara _adiciona_uf_se_necessario
+
+    with storage.get_connection() as conn:
+        monitor_row = conn.execute("SELECT grupo, uf FROM anuncios WHERE listing_id = 1").fetchone()
+        iphone_row = conn.execute("SELECT grupo, uf FROM anuncios WHERE listing_id = 2").fetchone()
+
+    assert monitor_row == ("AOC · Monitor Gamer", "ES")  # só ganha a coluna uf, grupo intacto (sem UF)
+    assert iphone_row == ("ES · IPHONE 13 · 128GB", "ES")  # grupo corrigido pro formato novo + coluna uf
+
+    # idempotência: rodar de novo não duplica o prefixo "ES · "
+    storage.init_db()
+    with storage.get_connection() as conn:
+        grupo_apos_segunda_chamada = conn.execute(
+            "SELECT grupo FROM anuncios WHERE listing_id = 2"
+        ).fetchone()[0]
+    assert grupo_apos_segunda_chamada == "ES · IPHONE 13 · 128GB"
+
+
 def test_upsert_grava_campos_de_computador(tmp_path):
     storage = _reload_storage(tmp_path, "teste_pc1.db")
     storage.init_db()
@@ -509,12 +673,12 @@ def test_tres_categorias_nao_interferem_entre_si(tmp_path):
     c3 = datetime(2026, 1, 1, 12, 24, tzinfo=timezone.utc)
 
     storage.upsert_ads([_ad(1, c1)])
-    storage.upsert_ads([_ad_iphone(101, c1)])
+    storage.upsert_ads([_ad_iphone(101, c1)], uf="ES")
     storage.upsert_ads([_ad_computador(201, c1)])
 
     # rodadas seguintes de cada categoria, sem as outras duas
     storage.upsert_ads([_ad(1, c2)])
-    storage.upsert_ads([_ad_iphone(101, c2)])
+    storage.upsert_ads([_ad_iphone(101, c2)], uf="ES")
     storage.upsert_ads([_ad_computador(201, c3)])
 
     with storage.get_connection() as conn:
