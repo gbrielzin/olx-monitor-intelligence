@@ -44,7 +44,7 @@ def _frescor_da_coleta(categoria: str | None, uf: str | None) -> tuple[str, str 
     """(texto da última coleta, uptime dos últimos 7 dias em % ou None).
     Uptime só é calculado com uma categoria escolhida -- cada categoria tem
     sua própria agenda (monitor/computador pararam de rodar em 12/09/2026,
-    ver CASE_DATA_ANALYTICS.md), então misturar todas sob 'Todas' não tem
+    ver docs/CASE_DATA_ANALYTICS.md), então misturar todas sob 'Todas' não tem
     uma frequência esperada única pra comparar contra."""
     coletas = carregar_coletas(dias=7, categoria=categoria, uf=uf)
     if coletas.empty:
@@ -84,7 +84,7 @@ def secao_kpis(categoria: str | None, uf: str | None = None) -> None:
             f"esperadas a cada {settings.scrape_interval_minutes} min — medido "
             "direto na tabela `coletas`, não é estimativa. Coleta roda numa "
             "máquina pessoal, não um servidor sempre ligado (ver "
-            "OLX_DEEP_DIVE.md, seção 7.5)."
+            "docs/OLX_DEEP_DIVE.md, seção 7.5)."
         )
 
 
@@ -399,7 +399,7 @@ categoria_label = st.radio(
     "Categoria", ["iPhone", "Monitor", "Computador", "Todas"], horizontal=True,
     help="iPhone é a única categoria ainda coletada -- Monitor e Computador "
     "pararam de ser agendados em 12/09/2026 (mercado se mostrou ineficaz, "
-    "ver CASE_DATA_ANALYTICS.md) e ficam com dado congelado: os anúncios "
+    "ver docs/CASE_DATA_ANALYTICS.md) e ficam com dado congelado: os anúncios "
     "continuam marcados como ativos mesmo sem confirmação recente de que "
     "ainda estão no ar, então oportunidade/margem ali não são confiáveis.",
 )

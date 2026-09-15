@@ -131,13 +131,13 @@ coleta desde 23/08/2026):
 
 | Métrica | Valor |
 |---|---|
-| Anúncios únicos rastreados | 3.967 |
-| — iPhone | 2.354 |
+| Anúncios únicos rastreados | 4.322 |
+| — iPhone | 2.709 |
 | — computador completo | 809 |
 | — monitor | 804 |
-| Quedas de preço reais capturadas (histórico, não só estado atual) | 5.530 |
-| Rodadas de coleta registradas (com checkpoint de sanidade cada uma) | 1.508 |
-| Dias com snapshot de mediana gravado (`medianas_diarias`) | 5 (recurso mais recente) |
+| Quedas de preço reais capturadas (histórico, não só estado atual) | 5.909 |
+| Rodadas de coleta registradas (com checkpoint de sanidade cada uma) | 1.513 |
+| Dias com snapshot de mediana gravado (`medianas_diarias`) | 6 |
 
 **A decisão mais relevante do ponto de vista de análise de dado**: o
 projeto começou coletando 3 categorias em paralelo de propósito — período
@@ -178,12 +178,54 @@ propósito (inclusive as falhas já encontradas e corrigidas):
   tamanho de amostra e enviesando o "preço justo" pro anúncio mais antigo
   no ar — corrigido mudando a granularidade pra 1 linha por anúncio (não
   por rodada de coleta). Ver `common/storage.py`.
+- **Segundo bug real de dado, corrigido em 15/09/2026, achado rodando o
+  sistema ao vivo**: a paginação da OLX às vezes repete um anúncio entre
+  páginas diferentes da MESMA rodada (destaque reaparecendo, ou os
+  resultados mudando de ordem entre uma requisição de página e outra).
+  Isso gerava duas linhas de `historico_precos` com a mesma chave
+  primária — violava a UNIQUE constraint e descartava **a rodada inteira**
+  (nem os anúncios sem duplicata eram gravados), silenciosamente, com um
+  alerta de erro no Telegram como único rastro. Reproduzido contra a OLX
+  ao vivo (3 de 500 anúncios vieram duplicados numa única rodada),
+  corrigido com dedup por `listing_id` em `upsert_ads()`
+  (`common/storage.py`), com teste de regressão. Fechar esse tipo de bug é
+  também o que sustenta o uptime medido abaixo — parte dos "buracos" de
+  coleta provavelmente vinha daqui, não só da máquina hibernando.
+- **Terceiro achado, de UX/confiabilidade do dashboard**: o seletor de
+  categoria abria por padrão em "Monitor" — uma categoria descontinuada
+  cujos anúncios ficam com `ativo=1` congelado (nunca mais são
+  re-checados, já que a categoria parou de ser coletada). Resultado:
+  margem calculada contra mediana **de dado morto**, produzindo números
+  de 300-400% que pareciam erro de cálculo mas eram, na verdade, ausência
+  de atualização. Corrigido trocando o padrão pra iPhone (a categoria
+  ativa) e adicionando um aviso explícito quando Monitor/Computador/Todas
+  é selecionado.
 - **Limitação de infraestrutura documentada com número real, não
   estimativa**: a coleta roda numa máquina pessoal, não um servidor sempre
   ligado — uptime medido diretamente na tabela `coletas` (não é uma
   suposição), com buracos de dezenas de horas quando a máquina hiberna.
   Detalhe completo, com a query e a tabela de números, em
-  `OLX_DEEP_DIVE.md`, seção 7.5.
+  `OLX_DEEP_DIVE.md`, seção 7.5. O próprio dashboard agora expõe esse
+  número ao vivo (ver seção seguinte), em vez de deixá-lo só no código.
+
+## Métricas do dashboard (frescor, ciclo de vida, distribuição)
+
+Adicionadas em 15/09/2026, depois de olhar o dashboard e perceber que
+"dado válido tecnicamente" e "dado confiável agora" são perguntas
+diferentes — a segunda não tinha métrica nenhuma até então:
+
+- **Frescor da coleta** — no topo, sempre visível: há quanto tempo foi a
+  última rodada + uptime real dos últimos 7 dias (rodadas reais / rodadas
+  esperadas, medido em `coletas`, não estimado). Trata "o dado tá
+  atualizado?" como métrica de primeira classe, não como suposição.
+- **Tempo médio no ar** — mediana de dias que um anúncio fica ativo antes
+  de sumir da busca (`primeiro_visto_em` até `removido_em`), por categoria
+  — métrica de ciclo de vida/giro de mercado.
+- **Distribuição de preço** — histograma com mediana e média marcadas,
+  por grupo filtrado. Explica visualmente por que `common/stats.py` usa
+  mediana (robusta a outlier) em vez de média, e é também a primeira
+  pista visual de quando uma categoria tem dado congelado — a mesma causa
+  raiz do segundo bug listado acima.
 
 ## Como executar
 
@@ -216,4 +258,4 @@ PYTHONPATH=. pytest tests/ -v
   conexão via ODBC) facilitaria plugar em Power BI/Excel sem reescrever a
   camada de análise.
 - Roadmap completo de produto (bicicletas/ferramentas, produtização) no
-  [`README.md`](README.md#roadmap-próximos-passos-já-pensados-não-implementados).
+  [`README.md`](../README.md#roadmap-próximos-passos-já-pensados-não-implementados).

@@ -187,7 +187,7 @@ def grava_snapshot_diario(categoria: str | None = None) -> int:
 
     Deliberadamente NÃO preso a um horário fixo (ex.: só à meia-noite): a
     coleta roda numa máquina pessoal que dorme/hiberna de forma irregular
-    (uptime real medido em ~19-26%, ver OLX_DEEP_DIVE.md seção 7.5) — um
+    (uptime real medido em ~19-26%, ver docs/OLX_DEEP_DIVE.md seção 7.5) — um
     gatilho de horário fixo perderia o dia inteiro toda vez que a máquina
     estivesse desligada naquele instante. Chamar isto no fim de toda rodada,
     de qualquer categoria, garante que a PRIMEIRA rodada que rodar num dia

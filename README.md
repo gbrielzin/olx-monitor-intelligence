@@ -13,10 +13,11 @@ paralelo por semanas, mas o próprio dado coletado mostrou mercado
 eficiente demais pra sustentar a tese de arbitragem, e foram
 descontinuadas (código ainda existe, só parou de ser agendado — ver
 `common/config.py`). A decisão e os números por trás dela estão em
-[`CASE_DATA_ANALYTICS.md`](CASE_DATA_ANALYTICS.md).
+[`docs/CASE_DATA_ANALYTICS.md`](docs/CASE_DATA_ANALYTICS.md).
 
 > Pra profundidade técnica de backend/infra, ver
-> [`OLX_DEEP_DIVE.md`](OLX_DEEP_DIVE.md).
+> [`docs/OLX_DEEP_DIVE.md`](docs/OLX_DEEP_DIVE.md). Documentação completa
+> em [`docs/`](docs/).
 
 ## Como rodar
 
