@@ -220,6 +220,35 @@ def test_upsert_ads_lista_vazia_nao_quebra(tmp_path):
     assert resultado.quedas == {}
 
 
+def test_listing_duplicado_na_mesma_rodada_nao_quebra_a_rodada_inteira(tmp_path):
+    """Bug real, achado rodando o scraper contra a OLX ao vivo em
+    15/09/2026: a paginação repete um anúncio (destaque reaparecendo, ou
+    os resultados mudando de ordem entre a requisição de uma página e
+    outra) -- `ads` chega em `upsert_ads` com o mesmo listing_id duas
+    vezes na MESMA rodada. Antes do fix, isso gerava duas linhas de
+    `historico_precos` com o mesmo (listing_id, plataforma,
+    registrado_em) e violava a UNIQUE constraint da tabela -- como a
+    exceção estourava dentro da mesma transação do upsert de `anuncios`,
+    a rodada inteira era descartada (nem os anúncios sem duplicata eram
+    gravados). Aqui simula 3 anúncios, um deles repetido."""
+    storage = _reload_storage(tmp_path, "teste_dup_na_rodada.db")
+    storage.init_db()
+    agora = datetime.now(timezone.utc)
+
+    resultado = storage.upsert_ads(
+        [_ad(1, agora, preco=500.0), _ad(2, agora, preco=700.0), _ad(1, agora, preco=500.0)]
+    )
+
+    with storage.get_connection() as conn:
+        total_anuncios = conn.execute("SELECT COUNT(*) FROM anuncios").fetchone()[0]
+        total_historico = conn.execute(
+            "SELECT COUNT(*) FROM historico_precos WHERE listing_id = 1"
+        ).fetchone()[0]
+    assert total_anuncios == 2
+    assert total_historico == 1
+    assert resultado.novos == {1, 2}
+
+
 def test_contagem_media_ultimas_coletas_usa_tabela_coletas(tmp_path):
     storage = _reload_storage(tmp_path, "teste_media.db")
     storage.init_db()

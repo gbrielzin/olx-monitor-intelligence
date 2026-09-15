@@ -1,19 +1,21 @@
 # OLX Monitor Intelligence — Deep Dive Técnico
 
-> **Propósito deste documento:** isto não é documentação de referência genérica —
-> é material pra você dominar o projeto tecnicamente a ponto de defender qualquer
-> decisão numa entrevista, camada por camada (o quê → como → por quê → trade-off →
-> o que quebra → como escalar).
+> **Propósito deste documento:** documentação técnica em profundidade do projeto,
+> camada por camada (o quê → como → por quê → trade-off → o que quebra → como
+> escalar) — cobre arquitetura, scraping, banco de dados, backend, Docker,
+> interface e qualidade.
 >
-> **Regra que segui escrevendo isto:** toda afirmação de "por quê" vem de uma fonte
-> verificável — comentário no código, mensagem de commit, teste, README, ou uma
-> conversa anterior registrada (datada). Quando a razão de uma decisão não está
-> registrada em nenhum lugar, digo isso explicitamente em vez de inventar uma
-> justificativa que soa bem. Onde uso um número, ele veio de uma consulta real
-> (ao código, ao git, ou ao banco de dados) — nunca é estimativa apresentada como
-> fato. Datas de "hoje"/"ao vivo" abaixo se referem a **02/09/2026**, quando este
-> documento foi escrito; números de uma auditoria anterior vêm marcados com a data
-> dela (25–26/08/2026).
+> **Metodologia:** toda afirmação de "por quê" vem de uma fonte verificável —
+> comentário no código, mensagem de commit, teste, README, ou uma conversa
+> anterior registrada (datada). Quando a razão de uma decisão não está registrada
+> em nenhum lugar, o documento diz isso explicitamente em vez de apresentar uma
+> justificativa especulativa como fato. Todo número vem de uma consulta real (ao
+> código, ao git, ou ao banco de dados) — nunca é estimativa apresentada como
+> dado. Datas de "hoje"/"ao vivo" abaixo se referem a **02/09/2026**, quando a
+> versão original deste documento foi escrita; números de uma auditoria anterior
+> vêm marcados com a data dela (25–26/08/2026). **Revisado em 15/09/2026** pra
+> reconciliar com o commit `80e4585` (12/09/2026), que descontinuou monitor
+> gamer e computador completo do agendamento — ver nota em cada seção afetada.
 >
 > Referências de código usam o formato `arquivo:linha` — abra o arquivo no VS Code
 > e vá direto na linha citada.
@@ -23,12 +25,30 @@
 ## 1. Problema
 
 **O que o projeto resolve.** É um sistema pessoal de arbitragem informacional:
-monitora anúncios de **monitor gamer, iPhone e computador completo usados** na
-OLX (Grande Vitória/ES), calcula o preço justo de mercado (mediana) de cada
-subgrupo de produto, e avisa via Telegram quando um anúncio aparece — ou cai de
-preço — abaixo desse preço justo, dentro de um orçamento que faz sentido comprar.
-O objetivo final é comprar abaixo do valor de mercado e revender com margem (a
-aba "Vendas" do dashboard é onde isso é registrado manualmente).
+monitora anúncios de usados na OLX, calcula o preço justo de mercado (mediana)
+de cada subgrupo de produto, e avisa via Telegram quando um anúncio aparece —
+ou cai de preço — abaixo desse preço justo, dentro de um orçamento que faz
+sentido comprar. O objetivo final é comprar abaixo do valor de mercado e
+revender com margem (a aba "Vendas" do dashboard é onde isso é registrado
+manualmente).
+
+**Categorias: histórico e estado atual.** O MVP testou três categorias em
+paralelo — **monitor gamer, iPhone e computador completo** — deliberadamente,
+período descrito internamente como "dado amplo antes de regra de negócio por
+categoria". Depois de semanas rodando as três, o commit `80e4585`
+(`remocao-de-computadores-e-monitores`, 12/09/2026) parou de agendar monitor e
+computador, registrando o motivo direto no código (`common/config.py`):
+*"mercado se mostrou ineficaz"*. **Hoje (revisão de 15/09/2026), só iPhone
+continua ativo — e não mais só no Espírito Santo: `scraper/main.py` roda uma
+rodada por região configurada em `settings.iphone_regioes` (modelo `Regiao`),
+sequencialmente, cada uma podendo notificar um chat de Telegram diferente.**
+O código de monitor/computador não foi apagado (`rodar_coleta_monitor`/
+`rodar_coleta_computador` em `scraper/main.py` continuam definidas, só não são
+mais chamadas pelo agendador) — dado histórico das duas categorias permanece no
+banco pra análise. As seções abaixo que descrevem o comportamento *atual* do
+sistema (agendamento, arquitetura ao vivo) refletem só iPhone; onde este
+documento cita monitor/computador com números, é sempre uma referência ao
+período em que as três categorias estavam ativas, marcada como tal.
 
 A tese, nas palavras do próprio README (`README.md:185`): *"parte do mercado de
 usados é ineficiente — vendedor urgente ou desinformado anuncia abaixo do preço
@@ -46,7 +66,9 @@ automatizado.
 **A dificuldade real de achar boas oportunidades manualmente** — isto é o que a
 auditoria de 25–26/08/2026 ("Raio-X do Monitor Gamer", o relatório que motivou
 boa parte das regras de negócio hoje em `common/config.py`) mediu com dado real,
-não é uma afirmação genérica de pitch:
+não é uma afirmação genérica de pitch. Os cinco pontos abaixo são desse período
+(quando as três categorias estavam ativas em paralelo — ver nota acima sobre o
+estado atual):
 
 1. **Volume que não escala pra revisão manual.** Só de monitor, o catálogo ativo
    girava em ~250 anúncios naquela auditoria (hoje, 02/09/2026, são 500 — ver
@@ -87,8 +109,14 @@ Dois serviços Docker (`docker-compose.yml`), cada um com seu próprio
 `Dockerfile` e `requirements.txt`, ambos montando o mesmo volume `./data:/data`:
 
 - **`scraper`** — processo de longa duração, sem porta exposta, `restart:
-  unless-stopped`. Roda um `BlockingScheduler` (APScheduler) que dispara 3
-  rotinas (monitor/iPhone/computador) a cada `scrape_interval_minutes` (12 min).
+  unless-stopped`. Roda um `BlockingScheduler` (APScheduler) com dois jobs:
+  `rodar_coleta_iphone_todas_regioes` a cada `scrape_interval_minutes` (12 min)
+  — uma rodada sequencial por região em `settings.iphone_regioes`, com um
+  delay pequeno entre regiões (`intervalo_entre_regioes_segundos`) — e
+  `enviar_resumo_diario` (cron, 1x/dia, opcional). O agendamento de
+  monitor/computador foi removido do scheduler em 12/09/2026 (ver seção 1);
+  as funções (`rodar_coleta_monitor`/`rodar_coleta_computador`) continuam
+  definidas em `scraper/main.py`, só não são mais chamadas.
 - **`dashboard`** — Streamlit, porta `8501` exposta, `depends_on: scraper`
   (controla só a ordem de subida do container, não prontidão — ver seção 7).
 
@@ -98,7 +126,8 @@ que não recebe requisições: ele roda em ciclo, agendado.
 ### 2.2 Fluxo completo dos dados
 
 ```
-   APScheduler (tick a cada 12 min, x3 categorias)
+   APScheduler (tick a cada 12 min -- 1 rodada por região de iPhone
+                configurada em settings.iphone_regioes, sequencial)
         |
         v
    fetch_html() ---> extract_ads() ---> build_ads() ---> checar_sanidade()
@@ -258,15 +287,21 @@ anúncios/categoria/rodada); 1s de espera entre páginas dentro da mesma rodada.
   "generosa/sem teto" (5→20) ou deixar como está — alinhado com a filosofia
   que o próprio README já documentava, de scraper "deliberadamente discreto".
 
-**Observação ao vivo, hoje (02/09/2026), que vale seu acompanhamento:** as
-últimas rodadas das 3 categorias estão batendo `total_anuncios = 500` de forma
+**Observação ao vivo de 02/09/2026 (histórica):** as últimas rodadas das 3
+categorias, então todas ativas, estavam batendo `total_anuncios = 500` de forma
 consistente e exata (conferido direto na tabela `coletas`) — o mesmo padrão
 ("número redondo e constante") que motivou subir de 5 para 10 páginas antes.
-Isso **não está diagnosticado nem documentado em lugar nenhum do código** — pode
-ser coincidência de o mercado real ter ~500+ anúncios ativos em cada categoria
-agora, ou pode ser o teto cortando de novo. Vale rodar a mesma checagem que
-motivou o `c553b83` (contagem variando ou travada num número redondo?) antes de
-decidir se sobe de novo.
+Na época, isso não estava diagnosticado: podia ser coincidência de o mercado
+real ter ~500+ anúncios ativos, ou o teto cortando de novo.
+
+**O que aconteceu depois:** o commit `80e4585` (12/09/2026) descontinuou
+monitor e computador citando "mercado se mostrou ineficaz" (ver seção 1) — o
+commit não referencia esta observação especificamente, então não há como
+afirmar com certeza que o teto de paginação foi a causa raiz da leitura
+"mercado ineficaz". O que dá pra afirmar, com fonte verificável: a suspeita
+levantada aqui nunca foi formalmente investigada antes da categoria ser
+descontinuada — permanece como um "não sei" documentado, não uma explicação
+fechada.
 
 ### 3.4 Tratamento de erros
 
@@ -334,11 +369,14 @@ Do próprio README (`README.md:76-90`), mais uma observação minha ao vivo:
 
 - **Partida fria dos alertas de oportunidade.** `common/stats.py` só confia na
   mediana de um grupo com pelo menos `oportunidade_amostra_minima` (5) anúncios
-  ativos. Hoje (02/09/2026), medindo direto no banco: monitor tem 15 de 31
-  grupos distintos com amostra confiável, iPhone 30 de 94, computador 22 de 50
-  — ou seja, **a maioria dos grupos de iPhone e boa parte dos de computador
-  ainda não geram alerta de oportunidade**, mesmo com centenas de anúncios
-  ativos no total.
+  ativos. Em 02/09/2026, quando as 3 categorias ainda estavam ativas, medindo
+  direto no banco: monitor tinha 15 de 31 grupos distintos com amostra
+  confiável, iPhone 30 de 94, computador 22 de 50 — a maioria dos grupos de
+  iPhone e boa parte dos de computador não geravam alerta de oportunidade,
+  mesmo com centenas de anúncios ativos no total. Essa mesma dinâmica —
+  cauda longa de grupos pequenos demais pra confiar na mediana — se aplica
+  hoje à expansão multi-UF do iPhone: cada estado novo começa do zero de
+  amostra por grupo.
 - **`requests` pode parar de funcionar** se a OLX endurecer a proteção a ponto
   de bloquear requisições simples — o checkpoint de sanidade é a rede de
   segurança, não uma prevenção.
@@ -375,8 +413,9 @@ uptime real na seção 7.
 
 **`vendas`** — registro manual (não preenchido pelo scraper) de compra/revenda.
 Comentário no próprio schema (`common/storage.py:110-112`): *"é o que permite
-comparar margem estimada com margem real algum dia."* Hoje, 02/09/2026: **0
-registros** — o usuário ainda não usou essa aba pra nenhuma compra real.
+comparar margem estimada com margem real algum dia."* Ainda **0 registros**
+(confirmado 02/09/2026 e reconfirmado 15/09/2026) — a aba ainda não foi usada
+pra nenhuma compra real.
 
 ### 4.2 Relacionamentos
 
@@ -746,6 +785,15 @@ duração que você quer conseguir debugar olhando o log ao vivo.
   | iPhone | 175 | ~904 (7,5 dias) | **~19%** | 65,9h |
   | computador | 167 | ~898 (7,5 dias) | **~19%** | 65,7h |
 
+  **Nota da revisão de 15/09/2026:** esta tabela é uma medição histórica de
+  02/09/2026, de quando as 3 categorias ainda rodavam em paralelo — monitor e
+  computador pararam de ser agendados em 12/09/2026 (seção 1), então essas
+  duas linhas não têm mais rodada nova sendo produzida. A causa raiz (host
+  pessoal que hiberna) segue idêntica pra iPhone, hoje rodando em múltiplas
+  UFs na mesma máquina; uma remedição de uptime pós-pivô não foi feita neste
+  documento — quem for defender o número em entrevista deve rodar a mesma
+  consulta em `coletas` antes, não reusar a tabela abaixo como se fosse atual.
+
   Os dois maiores buracos (quase 66h cada) acontecem **no mesmo horário nas 3
   categorias simultaneamente** — não é falha de uma categoria específica, é a
   máquina inteira pausando (notebook hibernando/desligado). O `docker ps`
@@ -791,11 +839,18 @@ seguro (seção 4.5).
 
 ### 8.3 Filtros
 
-Um seletor só, mas que atravessa quase toda a página: `st.radio("Categoria",
-["Monitor", "iPhone", "Computador", "Todas"])`. `categoria=None` (opção
-"Todas") remove o filtro `WHERE categoria = ?` nas queries (`dashboard/
-queries.py:12-16`) e nas medianas (`common/stats.py:133-143`) — mesma função,
-tratando ausência de filtro como caso explícito, não um valor mágico.
+`st.radio("Categoria", ["Monitor", "iPhone", "Computador", "Todas"])` continua
+cobrindo as 3 categorias (`dashboard/app.py:336-337`) — inclusive as
+descontinuadas, porque o dashboard explora dado histórico, não só o que está
+sendo coletado agora. `categoria=None` (opção "Todas") remove o filtro `WHERE
+categoria = ?` nas queries (`dashboard/queries.py:12-16`) e nas medianas
+(`common/stats.py:133-143`) — mesma função, tratando ausência de filtro como
+caso explícito, não um valor mágico.
+
+**Adicionado depois da versão original deste documento:** com a categoria
+"iPhone" selecionada, aparece um segundo seletor, `st.radio("Estado", ["Todos"]
++ ufs_iphone)` (`dashboard/app.py:342-344`), populado a partir de
+`settings.iphone_regioes` — reflexo direto da expansão multi-UF (seção 2.1).
 
 ### 8.4 Visualização
 
@@ -817,9 +872,11 @@ tratando ausência de filtro como caso explícito, não um valor mágico.
 Já detalhado por camada na seção 3.4 — o padrão geral é: **cada etapa do
 pipeline tem seu próprio tipo de erro esperado, capturado no nível mais baixo
 possível, sempre resultando em "avisa e desiste da rodada" em vez de deixar
-uma exceção não tratada subir e matar o processo inteiro do scraper** (que
-serve 3 categorias — um erro não capturado numa mataria as outras duas
-também, já que rodam no mesmo `BlockingScheduler`).
+uma exceção não tratada subir e matar o processo inteiro do scraper.** Isso
+valia originalmente pras 3 categorias rodando no mesmo `BlockingScheduler` (um
+erro não capturado numa mataria as outras duas); hoje o mesmo isolamento vale
+por região de iPhone dentro de `rodar_coleta_iphone_todas_regioes` — uma
+região falhando não derruba as demais nem o job diário de resumo.
 
 ### 9.2 Logs
 
@@ -946,7 +1003,8 @@ escolha — não uma alegação histórica.
 | 9 | Notificar por Telegram | Lib `python-telegram-bot` / `requests` puro contra `sendMessage` | `requests` puro | Só precisa enviar, nunca receber updates — biblioteca inteira seria peso morto na imagem Docker (docstring `notifier.py`) | Sem retry/rate-limit automático da lib — tratado manualmente com try/except simples |
 | 10 | Formatar mensagem do Telegram | Markdown (`parse_mode`) / texto puro | Texto puro | Bug real: texto não controlado (título de anúncio, exceção) com `_`/`*` desbalanceado quebrava o envio com erro 400, derrubando o próprio alerta de segurança (commit `955103d`) | Mensagem sem negrito/formatação — só texto corrido |
 | 11 | Intensidade da paginação (`max_paginas`) | Deixar em 5 / moderado (10) / generoso (20+) | 10 (moderado) | Teto de 5 cortava a coleta antes da parada natural, mascarando parte do mercado (commit `c553b83`); usuário escolheu explicitamente "moderado" sobre "generoso" quando perguntado (27/08/2026), alinhado com a filosofia de scraper discreto do README | Observação ao vivo (02/09/2026, não documentada): totais batendo exatamente 500/categoria/rodada de novo — mesmo padrão que motivou subir de 5→10 antes pode estar se repetindo |
-| 12 | Onde hospedar o scraper | PC pessoal (Docker Desktop) / VPS | PC pessoal, com Tailscale registrado como caminho de acesso remoto (não implementado como VPS) | IP de datacenter (Hetzner/Vultr/etc.) tem taxa de bloqueio maior que IP residencial em site com proteção anti-bot ativa como a OLX — risco identificado e decisão registrada explicitamente (auditoria 25–26/08) | Uptime real medido hoje (02/09/2026) em ~19–26% do esperado, com buracos de até 65,9h — a máquina dormir custa janela de oportunidade real, silenciosamente (Docker mostra "Up" mesmo com host suspenso) |
+| 12 | Onde hospedar o scraper | PC pessoal (Docker Desktop) / VPS | PC pessoal, com Tailscale registrado como caminho de acesso remoto (não implementado como VPS) | IP de datacenter (Hetzner/Vultr/etc.) tem taxa de bloqueio maior que IP residencial em site com proteção anti-bot ativa como a OLX — risco identificado e decisão registrada explicitamente (auditoria 25–26/08) | Uptime medido em 02/09/2026 em ~19–26% do esperado, com buracos de até 65,9h (número histórico, ver nota na seção 7.5) — a máquina dormir custa janela de oportunidade real, silenciosamente (Docker mostra "Up" mesmo com host suspenso) |
+| 13 | Continuar 3 categorias em paralelo indefinidamente, ou concentrar esforço na que performa | Manter monitor + iPhone + computador / descontinuar as fracas e escalar a forte geograficamente | Descontinuar monitor e computador; escalar iPhone pra múltiplas UFs (`settings.iphone_regioes`) | Código registra o motivo direto: "mercado se mostrou ineficaz" pra monitor/computador (commit `80e4585`, 12/09/2026) — decisão tomada sobre semanas de dado real coletado em paralelo, não intuição (ver seção 1) | Perde a diversificação de categoria (parser modular de `schema.py` ficaria ocioso pras duas); ganha amostra por grupo mais rápida numa única categoria, e testa a hipótese de escala geográfica em vez de escala por produto |
 
 ---
 
@@ -971,6 +1029,14 @@ escolha — não uma alegação histórica.
 - **Memória de conversas anteriores** deste projeto (datadas): fase atual de
   coleta ampla de dados, preferência por scraping discreto, uptime real da
   infraestrutura, origem do relatório Raio-X.
+- **Revisão de 15/09/2026**, reconciliando o documento original (02/09/2026)
+  com o estado atual do código e do banco: leitura de `common/config.py`,
+  `scraper/main.py` e `dashboard/app.py` como estão hoje; `git show
+  80e4585 -- common/config.py` (mensagem e diff do commit que descontinuou
+  monitor/computador); contagens atuais do banco de produção (15/09/2026):
+  3.967 anúncios únicos (iPhone 2.354, computador 809, monitor 804), 5.530
+  linhas em `historico_precos`, 1.508 linhas em `coletas`, 319 linhas em
+  `medianas_diarias` cobrindo 5 dias distintos com snapshot.
 
 Onde nenhuma dessas fontes tinha resposta, este documento diz isso
 explicitamente ("não determinado pelo código") em vez de inventar uma
