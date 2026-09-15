@@ -501,6 +501,25 @@ def upsert_ads(ads: list, plataforma: str = "olx", uf: str | None = None) -> Col
     if not ads:
         return ColetaResultado()
 
+    # Dedup por listing_id -- a paginação da OLX pode repetir um anúncio
+    # (destaque reaparecendo, ou os resultados mudando de ordem entre a
+    # requisição de uma página e outra dentro da MESMA rodada), então o
+    # `ads` que chega aqui não é garantidamente único por listing_id.
+    # Sem isso, dois anúncios idênticos geravam duas linhas de
+    # `historico_precos` com o mesmo (listing_id, plataforma,
+    # registrado_em) -- violava a UNIQUE constraint da tabela e descartava
+    # A RODADA INTEIRA (nada era gravado, nem os anúncios que vieram
+    # certos) -- visto ao vivo em produção: `rodar_coleta` (scraper/main.py)
+    # captura a exceção, alerta por Telegram e retorna sem persistir nada.
+    vistos: set[int] = set()
+    ads_unicos = []
+    for a in ads:
+        if a.listing_id in vistos:
+            continue
+        vistos.add(a.listing_id)
+        ads_unicos.append(a)
+    ads = ads_unicos
+
     categoria = ads[0].categoria
     momento = ads[0].coletado_em.isoformat()
     estado_antes = snapshot_estado(plataforma, categoria, uf)

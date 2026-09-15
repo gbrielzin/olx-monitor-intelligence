@@ -1,14 +1,22 @@
-# Monitor Gamer — Inteligência de mercado (OLX-ES)
+# OLX Monitor Intelligence
 
-MVP de arbitragem informacional: monitora anúncios de monitores gamer
-na OLX (Grande Vitória/ES), detecta oportunidades abaixo da mediana de
-mercado e avisa por Telegram, com um dashboard Streamlit pra
-acompanhar tendência de preço por modelo.
+Sistema de arbitragem informacional: monitora anúncios de usados na
+OLX, calcula o preço justo de mercado (mediana por grupo comparável) e
+avisa por Telegram quando um anúncio aparece — ou cai de preço —
+abaixo dele, com um dashboard Streamlit pra acompanhar tendência de
+preço por grupo.
 
-> Avaliando este projeto pelo ângulo de **análise de dados** (pipeline,
-> qualidade, indicadores, decisão orientada a dado)? Ver
-> [`CASE_DATA_ANALYTICS.md`](CASE_DATA_ANALYTICS.md). Pra profundidade
-> técnica de backend/infra, [`OLX_DEEP_DIVE.md`](OLX_DEEP_DIVE.md).
+**Hoje ativo pra iPhone, em múltiplas UFs** (uma execução cobre vários
+estados, cada um com seu próprio grupo de alerta). Monitor gamer e
+computador completo foram as categorias originais do MVP: rodaram em
+paralelo por semanas, mas o próprio dado coletado mostrou mercado
+eficiente demais pra sustentar a tese de arbitragem, e foram
+descontinuadas (código ainda existe, só parou de ser agendado — ver
+`common/config.py`). A decisão e os números por trás dela estão em
+[`CASE_DATA_ANALYTICS.md`](CASE_DATA_ANALYTICS.md).
+
+> Pra profundidade técnica de backend/infra, ver
+> [`OLX_DEEP_DIVE.md`](OLX_DEEP_DIVE.md).
 
 ## Como rodar
 
@@ -96,10 +104,6 @@ barato do que enfiar lixo no banco por dias sem ninguém notar.
 
 ## Roadmap (próximos passos já pensados, não implementados)
 
-- **iPhone como segunda categoria** — fora do MVP porque a tese é mais
-  fraca (preço justo óbvio pra qualquer comprador), mas o parser de
-  `schema.py` já é modular o bastante pra adicionar sem reescrever o
-  resto.
 - **Mercado Livre como segunda plataforma** — a coluna `plataforma` já
   existe em todo o schema e no banco, propositalmente, pra isso não
   exigir migração quando chegar a hora.
