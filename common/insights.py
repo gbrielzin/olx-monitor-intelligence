@@ -134,6 +134,38 @@ def conflitos_titulo_modelo(df: pd.DataFrame) -> pd.DataFrame:
     return df[mascara]
 
 
+def precisao_alertas(conferencias: pd.DataFrame) -> dict:
+    """De todos os alertas que o usuário conferiu no anúncio real, quantos
+    eram oportunidade de verdade. `inconclusivo` não entra na conta (não é
+    acerto nem erro), mas é reportado. `motivos` lista por que os falsos
+    alarmes falharam -- o que diz onde melhorar a regra."""
+    if conferencias.empty:
+        return {"conferidos": 0, "reais": 0, "falsos": 0, "inconclusivos": 0, "precisao_pct": None, "motivos": {}}
+    contagem = conferencias["veredito"].value_counts()
+    reais, falsos = int(contagem.get("real", 0)), int(contagem.get("falso", 0))
+    decididos = reais + falsos
+    motivos = conferencias[conferencias["veredito"] == "falso"]["motivo"].fillna("Sem motivo").value_counts()
+    return {
+        "conferidos": len(conferencias),
+        "reais": reais,
+        "falsos": falsos,
+        "inconclusivos": int(contagem.get("inconclusivo", 0)),
+        "precisao_pct": reais / decididos * 100 if decididos else None,
+        "motivos": motivos.to_dict(),
+    }
+
+
+def maiores_buracos(coletas: pd.DataFrame, n: int = 3) -> list[tuple[pd.Timestamp, float]]:
+    """Os `n` maiores intervalos entre rodadas consecutivas, em horas --
+    onde a coleta ficou parada (máquina dormindo). [(início do buraco, horas)]."""
+    if len(coletas) < 2:
+        return []
+    datas = pd.to_datetime(coletas["coletado_em"]).sort_values().reset_index(drop=True)
+    horas = datas.diff().dt.total_seconds() / 3600
+    topo = horas.nlargest(n)
+    return [(datas[i - 1], float(h)) for i, h in topo.items()]
+
+
 def cobertura_coleta(coletas: pd.DataFrame) -> dict:
     """Quantos dias da janela tiveram pelo menos uma rodada -- o número
     honesto de disponibilidade de uma coleta que roda num PC pessoal."""

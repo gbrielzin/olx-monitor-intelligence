@@ -86,3 +86,30 @@ def test_cobertura_coleta_conta_dias_distintos():
     ]})
     assert cobertura_coleta(c) == {"rodadas": 3, "dias_com_coleta": 2, "dias_janela": 4}
     assert cobertura_coleta(pd.DataFrame())["rodadas"] == 0
+
+
+def test_precisao_alertas_ignora_inconclusivos_e_lista_motivos():
+    from common.insights import precisao_alertas
+
+    c = pd.DataFrame({
+        "veredito": ["real", "real", "real", "falso", "inconclusivo"],
+        "motivo": [None, None, None, "iCloud / bloqueio", None],
+    })
+    p = precisao_alertas(c)
+    assert p["conferidos"] == 5 and p["reais"] == 3 and p["falsos"] == 1 and p["inconclusivos"] == 1
+    assert p["precisao_pct"] == 75.0
+    assert p["motivos"] == {"iCloud / bloqueio": 1}
+    assert precisao_alertas(pd.DataFrame())["precisao_pct"] is None
+
+
+def test_maiores_buracos_devolve_os_maiores_intervalos():
+    from common.insights import maiores_buracos
+
+    c = pd.DataFrame({"coletado_em": [
+        "2026-09-01T00:00:00+00:00", "2026-09-01T01:00:00+00:00",
+        "2026-09-03T01:00:00+00:00", "2026-09-03T02:00:00+00:00",
+    ]})
+    top = maiores_buracos(c, n=1)
+    assert len(top) == 1 and top[0][1] == 48.0
+    assert top[0][0] == pd.Timestamp("2026-09-01T01:00:00+00:00")
+    assert maiores_buracos(pd.DataFrame({"coletado_em": ["2026-09-01T00:00:00+00:00"]})) == []

@@ -9,10 +9,13 @@ from charts import (
     grafico_tendencia_quedas,
 )
 from common.config import settings
+from common.export import para_csv_bytes, tabelas_para_bi
 from common.insights import (
     cobertura_coleta,
     conflitos_titulo_modelo,
     dispersao_por_categoria,
+    maiores_buracos,
+    precisao_alertas,
     resumo_quedas,
     tempo_no_ar_por_faixa,
 )
@@ -26,6 +29,7 @@ from queries import (
     carregar_todos_anuncios,
     carregar_ultima_coleta_por_categoria,
 )
+from conferencias import MOTIVOS_FALSO, VEREDITOS, carregar_conferencias, registrar_conferencia
 from vendas import carregar_vendas, marcar_como_vendido, registrar_compra
 
 st.set_page_config(page_title="OLX Monitor Intelligence", layout="wide")
@@ -63,6 +67,10 @@ def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
     df["apos_negociar"] = [a.custo_apos_negociacao if a else None for a in avaliacoes]
     df["margem_rs"] = [a.margem_rs if a else None for a in avaliacoes]
     df["margem_pct"] = [a.margem_pct * 100 if a else None for a in avaliacoes]
+    df["margem_venda_pct"] = [a.margem_sobre_venda_pct * 100 if a else None for a in avaliacoes]
+    df["margem_conservadora_rs"] = [a.margem_conservadora_rs if a else None for a in avaliacoes]
+    df["mediana_grupo"] = [a.mediana if a else None for a in avaliacoes]
+    df["suspeita"] = [a.suspeita if a else False for a in avaliacoes]
     return df
 
 
@@ -146,9 +154,20 @@ def secao_alertas(categoria: str | None, uf: str | None = None) -> None:
         f"mediana do grupo. Não é o preço final, é ponto de partida pra negociar."
         f"{nota_orcamento}"
     )
+    st.caption(
+        f"Margem em três leituras: **sobre o custo** (a mais alta, ROI), **sobre a venda** e o "
+        f"**cenário conservador** (revenda {settings.desconto_revenda_esperado:.0%} abaixo da mediana, "
+        f"a queda real observada). Acima de {settings.margem_suspeita:.0%} sobre o custo o anúncio vem "
+        "marcado ⚠️ — preço muito baixo costuma ser defeito escondido (descrição, bateria, bloqueio), "
+        "não pechincha."
+    )
+    oportunidades = oportunidades.assign(
+        alerta=oportunidades["suspeita"].map({True: "⚠️ conferir", False: ""})
+    )
     st.dataframe(
         oportunidades[
-            ["categoria", "uf", "titulo", "preco", "apos_negociar", "margem_rs", "margem_pct",
+            ["alerta", "categoria", "uf", "titulo", "preco", "apos_negociar", "margem_rs", "margem_pct",
+             "margem_venda_pct", "margem_conservadora_rs",
              "condicao", "saude_bateria", "inclui_monitor", "marca", "municipio", "url"]
         ].sort_values("margem_pct", ascending=False),
         use_container_width=True,
@@ -160,7 +179,10 @@ def secao_alertas(categoria: str | None, uf: str | None = None) -> None:
             "preco": st.column_config.NumberColumn("Anunciado", format="R$ %.0f"),
             "apos_negociar": st.column_config.NumberColumn("Após negociar", format="R$ %.0f"),
             "margem_rs": st.column_config.NumberColumn("Margem", format="R$ %.0f"),
-            "margem_pct": st.column_config.NumberColumn("Margem %", format="%.0f%%"),
+            "margem_pct": st.column_config.NumberColumn("Margem % (custo)", format="%.0f%%"),
+            "margem_venda_pct": st.column_config.NumberColumn("Margem % (venda)", format="%.0f%%"),
+            "margem_conservadora_rs": st.column_config.NumberColumn("Margem conservadora", format="R$ %.0f"),
+            "alerta": "Alerta",
             "condicao": "Condição",
             "saude_bateria": "Bateria",
             "inclui_monitor": "Inclui monitor?",
@@ -169,6 +191,30 @@ def secao_alertas(categoria: str | None, uf: str | None = None) -> None:
             "url": st.column_config.LinkColumn("Link", display_text="abrir"),
         },
     )
+    _form_conferencia(oportunidades)
+
+
+def _form_conferencia(oportunidades: pd.DataFrame) -> None:
+    """Abre o anúncio de verdade, confere, anota. É daqui que sai a métrica
+    de precisão dos alertas (aba Resumo)."""
+    with st.expander("✅ Conferi um alerta no anúncio real"):
+        opcoes = {
+            f"{r.titulo[:60]} — R$ {r.preco:.0f}": r for r in oportunidades.itertuples()
+        }
+        escolha = st.selectbox("Qual alerta", list(opcoes.keys()), key="conf_alerta")
+        veredito = st.radio(
+            "Resultado", list(VEREDITOS.keys()), format_func=VEREDITOS.get, horizontal=True, key="conf_veredito"
+        )
+        motivo = None
+        if veredito == "falso":
+            motivo = st.selectbox("Por que falhou", MOTIVOS_FALSO, key="conf_motivo")
+        if st.button("Registrar conferência"):
+            r = opcoes[escolha]
+            registrar_conferencia(
+                int(r.listing_id), veredito, titulo=r.titulo, preco=float(r.preco),
+                mediana_grupo=float(r.mediana_grupo), margem_pct=float(r.margem_pct), motivo=motivo,
+            )
+            st.success("Conferência registrada — entra na precisão dos alertas (aba Resumo).")
 
 
 def secao_tendencia(categoria: str | None, uf: str | None = None) -> None:
@@ -439,14 +485,51 @@ def secao_resumo() -> None:
                 },
             )
 
+    st.markdown("### 5. Os alertas acertam?")
+    prec = precisao_alertas(carregar_conferencias())
+    if prec["conferidos"] == 0:
+        st.info(
+            "Nenhum alerta conferido ainda. Na aba Oportunidades, abra o anúncio real e registre se a "
+            "oportunidade era verdadeira — é assim que \"o sistema apita\" vira \"o sistema acerta\"."
+        )
+    else:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Alertas conferidos", prec["conferidos"])
+        c2.metric("Oportunidades reais", prec["reais"])
+        c3.metric(
+            "Precisão",
+            f"{prec['precisao_pct']:.0f}%" if prec["precisao_pct"] is not None else "—",
+            help="reais / (reais + falsos). Os inconclusivos ficam fora da conta.",
+        )
+        if prec["motivos"]:
+            st.caption("Por que os falsos alarmes falharam: " + "; ".join(f"{m} ({n})" for m, n in prec["motivos"].items()))
+        if prec["conferidos"] < 20:
+            st.caption("Amostra pequena (<20): trate como indicativo, não como taxa.")
+
     st.markdown("### Limitações")
+    buracos_txt = "; ".join(
+        f"{ini.tz_convert('America/Sao_Paulo').strftime('%d/%m %Hh')} → {h:.0f}h parado"
+        for ini, h in maiores_buracos(coletas)
+    ) or "sem dados"
     st.markdown(
         f"- **Cobertura:** coleta em {cob['dias_com_coleta']} de {cob['dias_janela']} dias — roda num PC "
         "pessoal, não num servidor. Buracos de horas ou dias existem e estão na tabela `coletas`.\n"
+        f"- **Maiores buracos:** {buracos_txt}\n"
         "- **Uma região:** só o estado configurado é coletado; conclusões não se estendem a outros estados.\n"
         "- **Descritivo:** nenhuma análise acima prova causa. O backtest formal (o alerta antecipou mesmo uma "
         "queda de preço?) depende de mais histórico em `medianas_diarias`."
     )
+
+
+def secao_dados_bi() -> None:
+    st.caption(
+        "Tabelas planas (CSV com `;` e vírgula decimal, abrem direto no Excel/Power BI em português). "
+        "`dim_anuncios` já vai com `razao_mediana` e `confiavel` calculados pela mesma régua do sistema."
+    )
+    for nome, df in tabelas_para_bi().items():
+        c1, c2 = st.columns([3, 1])
+        c1.write(f"**{nome}** — {len(df):,} linhas".replace(",", "."))
+        c2.download_button("Baixar CSV", para_csv_bytes(df), file_name=f"{nome}.csv", mime="text/csv", key=f"dl_{nome}")
 
 
 def secao_sobre() -> None:
@@ -584,8 +667,10 @@ if categoria == "iphone" and len(ufs_iphone) > 1:
 
 secao_kpis(categoria, uf)
 
-tab_resumo, tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas, tab_auditoria, tab_sobre = st.tabs(
-    ["📖 Resumo", "🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas", "🩺 Auditoria", "ℹ️ Sobre o negócio"]
+(tab_resumo, tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas,
+ tab_auditoria, tab_dados, tab_sobre) = st.tabs(
+    ["📖 Resumo", "🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas",
+     "🩺 Auditoria", "📤 Dados (BI)", "ℹ️ Sobre o negócio"]
 )
 with tab_resumo:
     secao_resumo()
@@ -599,5 +684,7 @@ with tab_vendas:
     secao_vendas()
 with tab_auditoria:
     secao_auditoria(categoria, uf)
+with tab_dados:
+    secao_dados_bi()
 with tab_sobre:
     secao_sobre()
