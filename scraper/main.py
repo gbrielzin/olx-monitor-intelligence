@@ -159,12 +159,12 @@ def rodar_coleta(
             # pode derrubar a rodada nem os alertas de oportunidade abaixo.
             logger.warning("Falha ao auditar anúncio %s via IA (%s): %s", ad.listing_id, nome, e)
 
-        av = avaliar(ad.preco, ad.categoria, ad.grupo, ad.condicao, ad.titulo)
+        av = avaliar(ad.preco, ad.categoria, ad.grupo, ad.condicao, ad.titulo, getattr(ad, "modelo", None))
         if av and av.eh_oportunidade:
             enviar_telegram(_msg_novo(ad, av), chat_id=chat_id_oportunidade)
 
     for ad in quedas:
-        av = avaliar(ad.preco, ad.categoria, ad.grupo, ad.condicao, ad.titulo)
+        av = avaliar(ad.preco, ad.categoria, ad.grupo, ad.condicao, ad.titulo, getattr(ad, "modelo", None))
         if av and av.eh_oportunidade:
             _, preco_anterior = resultado.quedas[ad.listing_id]
             novo_minimo = eh_minimo_historico(ad.listing_id, ad.preco)

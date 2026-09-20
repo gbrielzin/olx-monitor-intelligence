@@ -33,11 +33,11 @@ _CATEGORIAS = ("iphone",)  # monitor/computador pararam de ser coletados
 def _ativos_por_categoria(categoria: str) -> list[dict]:
     with get_connection() as conn:
         cursor = conn.execute(
-            "SELECT titulo, preco, grupo, condicao, municipio, url FROM anuncios "
+            "SELECT titulo, preco, grupo, condicao, municipio, url, modelo FROM anuncios "
             "WHERE categoria = ? AND ativo = 1 AND preco IS NOT NULL",
             (categoria,),
         )
-        colunas = ("titulo", "preco", "grupo", "condicao", "municipio", "url")
+        colunas = ("titulo", "preco", "grupo", "condicao", "municipio", "url", "modelo")
         return [dict(zip(colunas, row)) for row in cursor.fetchall()]
 
 
@@ -72,7 +72,7 @@ def _panorama() -> dict:
             chave = (categoria, ad["grupo"])
             if chave not in medianas:
                 continue
-            if not margem_e_confiavel(ad["condicao"], ad["titulo"], ad["preco"], categoria):
+            if not margem_e_confiavel(ad["condicao"], ad["titulo"], ad["preco"], categoria, ad["modelo"]):
                 continue
             av = avaliar_preco(ad["preco"], medianas[chave], categoria)
             if av.eh_oportunidade:
