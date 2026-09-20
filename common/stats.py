@@ -80,11 +80,32 @@ _TITULO_DEFEITO_PATTERN = re.compile(
 )
 
 
+_IPHONE_GERACAO = re.compile(r"iphone\s*(1[0-9]|[6-9]|xr|xs|x|se)(?![0-9])", re.IGNORECASE)
+
+
+def titulo_conflita_com_modelo(titulo: str | None, modelo: str | None) -> bool:
+    """True quando o título cita uma geração de iPhone e NENHUMA das citadas
+    é a do campo estruturado `modelo`. Achado ao vivo (20/09/2026): 49 de
+    3.194 anúncios (1,5%) tinham o título dizendo "iPhone 17 Pro Max" com o
+    campo dizendo 16 Pro Max -- o anúncio entrava na mediana do grupo errado
+    (ex.: um "18 Pro Max" de R$13.599 dentro do grupo 17 Pro Max) e podia
+    virar alerta falso. Só compara a GERAÇÃO (número/letra), não variante
+    (Pro/Max/Plus): mais conservador, quase sem falso positivo. Título que
+    cita várias gerações ("vendo 14, troco por 17") só conflita se o modelo
+    não bate com nenhuma delas."""
+    if not titulo or not modelo:
+        return False
+    no_titulo = {g.upper() for g in _IPHONE_GERACAO.findall(titulo)}
+    no_modelo = {g.upper() for g in _IPHONE_GERACAO.findall(modelo)}
+    return bool(no_titulo and no_modelo and not (no_titulo & no_modelo))
+
+
 def margem_e_confiavel(
     condicao: str | None,
     titulo: str = "",
     preco: float | None = None,
     categoria: str | None = None,
+    modelo: str | None = None,
 ) -> bool:
     """False quando o preço não é comparável ao de um anúncio funcionando.
     Mesma regra vale pra decidir quem entra na mediana do grupo e pra
@@ -103,6 +124,8 @@ def margem_e_confiavel(
         return False
     if titulo and _TITULO_DEFEITO_PATTERN.search(titulo):
         return False
+    if titulo_conflita_com_modelo(titulo, modelo):
+        return False
     if preco is not None and categoria is not None:
         piso = getattr(settings, f"orcamento_minimo_{categoria}", None)
         if piso is not None and preco < piso:
@@ -114,15 +137,15 @@ def preco_mediano_grupo(categoria: str, grupo: str) -> float | None:
     with get_connection() as conn:
         cursor = conn.execute(
             """
-            SELECT preco, condicao, titulo FROM anuncios
+            SELECT preco, condicao, titulo, modelo FROM anuncios
             WHERE categoria = ? AND grupo = ? AND preco IS NOT NULL AND ativo = 1
             """,
             (categoria, grupo),
         )
         linhas = cursor.fetchall()
     precos = [
-        preco for preco, condicao, titulo in linhas
-        if margem_e_confiavel(condicao, titulo, preco, categoria)
+        preco for preco, condicao, titulo, modelo in linhas
+        if margem_e_confiavel(condicao, titulo, preco, categoria, modelo)
     ]
     if len(precos) < settings.oportunidade_amostra_minima:
         return None
@@ -150,19 +173,19 @@ def _grupos_confiaveis(categoria: str | None = None) -> dict[tuple[str, str], Gr
     with get_connection() as conn:
         if categoria is None:
             cursor = conn.execute(
-                "SELECT categoria, grupo, preco, condicao, titulo FROM anuncios "
+                "SELECT categoria, grupo, preco, condicao, titulo, modelo FROM anuncios "
                 "WHERE ativo = 1 AND preco IS NOT NULL"
             )
         else:
             cursor = conn.execute(
-                "SELECT categoria, grupo, preco, condicao, titulo FROM anuncios "
+                "SELECT categoria, grupo, preco, condicao, titulo, modelo FROM anuncios "
                 "WHERE ativo = 1 AND preco IS NOT NULL AND categoria = ?",
                 (categoria,),
             )
         linhas = cursor.fetchall()
     grupos: dict[tuple[str, str], list[float]] = {}
-    for cat, grupo, preco, condicao, titulo in linhas:
-        if not margem_e_confiavel(condicao, titulo, preco, cat):
+    for cat, grupo, preco, condicao, titulo, modelo in linhas:
+        if not margem_e_confiavel(condicao, titulo, preco, cat, modelo):
             continue
         grupos.setdefault((cat, grupo), []).append(preco)
     return {
@@ -187,7 +210,7 @@ def grava_snapshot_diario(categoria: str | None = None) -> int:
 
     Deliberadamente NÃO preso a um horário fixo (ex.: só à meia-noite): a
     coleta roda numa máquina pessoal que dorme/hiberna de forma irregular
-    (uptime real medido em ~19-26%, ver OLX_DEEP_DIVE.md seção 7.5) — um
+    (uptime real medido em ~19-26%, ver docs/OLX_DEEP_DIVE.md seção 7.5) — um
     gatilho de horário fixo perderia o dia inteiro toda vez que a máquina
     estivesse desligada naquele instante. Chamar isto no fim de toda rodada,
     de qualquer categoria, garante que a PRIMEIRA rodada que rodar num dia
@@ -307,8 +330,11 @@ class Avaliacao:
     mediana: float
     custo_apos_negociacao: float
     margem_rs: float
-    margem_pct: float
+    margem_pct: float  # sobre o CUSTO (ROI) -- a mais alta das três leituras
     eh_oportunidade: bool
+    margem_sobre_venda_pct: float = 0.0  # mesma margem, sobre o preço de revenda
+    margem_conservadora_rs: float = 0.0  # revendendo a mediana - desconto_revenda_esperado
+    suspeita: bool = False  # margem_pct acima de settings.margem_suspeita
 
 
 def _dentro_do_orcamento(preco: float, categoria: Optional[str]) -> bool:
@@ -331,6 +357,7 @@ def avaliar_preco(preco: float, mediana: float, categoria: Optional[str] = None)
     margem_rs = mediana - custo
     margem_pct = margem_rs / custo if custo > 0 else 0.0
     dentro_do_limiar = preco <= mediana * settings.oportunidade_limiar
+    revenda_conservadora = mediana * (1 - settings.desconto_revenda_esperado)
     return Avaliacao(
         preco=preco,
         mediana=mediana,
@@ -338,6 +365,9 @@ def avaliar_preco(preco: float, mediana: float, categoria: Optional[str] = None)
         margem_rs=margem_rs,
         margem_pct=margem_pct,
         eh_oportunidade=dentro_do_limiar and _dentro_do_orcamento(preco, categoria),
+        margem_sobre_venda_pct=margem_rs / mediana if mediana > 0 else 0.0,
+        margem_conservadora_rs=revenda_conservadora - custo,
+        suspeita=margem_pct > settings.margem_suspeita,
     )
 
 
@@ -347,13 +377,14 @@ def avaliar(
     grupo: str,
     condicao: str | None = None,
     titulo: str = "",
+    modelo: str | None = None,
 ) -> Avaliacao | None:
     """Ponto de entrada pra avaliar UM anúncio (usado pelo scraper, que
     processa poucos anúncios por rodada — uma consulta por anúncio aqui não
     é o gargalo que era no dashboard). None quando falta preço, o anúncio
     parece peça/sucata (`margem_e_confiavel`), ou a amostra do grupo ainda
     é pequena demais pra confiar na mediana."""
-    if preco is None or not margem_e_confiavel(condicao, titulo, preco, categoria):
+    if preco is None or not margem_e_confiavel(condicao, titulo, preco, categoria, modelo):
         return None
     mediana = preco_mediano_grupo(categoria, grupo)
     if mediana is None:

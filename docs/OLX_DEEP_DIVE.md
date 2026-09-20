@@ -50,10 +50,13 @@ sistema (agendamento, arquitetura ao vivo) refletem só iPhone; onde este
 documento cita monitor/computador com números, é sempre uma referência ao
 período em que as três categorias estavam ativas, marcada como tal.
 
-A tese, nas palavras do próprio README (`README.md:185`): *"parte do mercado de
-usados é ineficiente — vendedor urgente ou desinformado anuncia abaixo do preço
-justo. Achar isso manualmente, na hora certa, não escala; um scraper de baixa
-frequência sim."*
+A tese, resumida no próprio README (`../README.md:3-7`): um sistema de
+arbitragem informacional que calcula o preço justo de mercado (mediana por
+grupo comparável) e avisa quando um anúncio aparece — ou cai de preço —
+abaixo dele. A ideia por trás: parte do mercado de usados é ineficiente —
+vendedor urgente ou desinformado anuncia abaixo do preço justo — e achar
+isso manualmente, na hora certa, não escala; um scraper de baixa frequência
+sim.
 
 **Por que scraping, e não uma API.** Não há indício, nem no código nem no
 histórico do projeto, de uma API pública da OLX pra busca de anúncios — o único
@@ -175,7 +178,7 @@ WAL (`common/storage.py:1-5` — ver seção 4.5).
 
 ### 2.3 Uma imprecisão real no README, vale registrar
 
-O próprio `README.md:41` descreve `dashboard/` como **"só leitura do mesmo
+O próprio `../README.md:54` descreve `dashboard/` como **"só leitura do mesmo
 banco"**. Isso não é 100% exato: `dashboard/vendas.py` executa `INSERT`/`UPDATE`
 na tabela `vendas` a partir do próprio processo Streamlit, quando o usuário
 registra uma compra (`registrar_compra`) ou marca como vendida
@@ -200,7 +203,7 @@ desktop, `Accept-Language: pt-BR`) e timeout de 15s (`request_timeout_seconds`,
 automatizado.
 
 **Por quê `requests` e não um browser headless** — isto está documentado
-explicitamente, tanto no README (`README.md:44-49`) quanto no docstring do
+explicitamente, tanto no README (`../README.md:58-63`) quanto no docstring do
 próprio módulo (`scraper/fetcher.py:1-14`): a OLX **renderiza os anúncios no
 servidor** e embute os dados como JSON dentro do HTML (o payload de streaming
 do Next.js/React Server Components) — então não é preciso executar JavaScript
@@ -325,7 +328,7 @@ Resolvido em duas camadas:
 
 1. **Schema:** `anuncios` tem `PRIMARY KEY (listing_id, plataforma)` e um
    `UNIQUE INDEX` sobre `url` (`common/storage.py:81,84`).
-2. **Upsert, não insert:** `upsert_ads()` (`common/storage.py:383-514`) usa
+2. **Upsert, não insert:** `upsert_ads()` (`common/storage.py:476-637`) usa
    `INSERT ... ON CONFLICT (listing_id, plataforma) DO UPDATE SET ...` — o
    mesmo anúncio, visto em N rodadas seguidas com o mesmo preço, atualiza a
    **mesma linha** (`ultimo_visto_em` avança, o resto não muda), nunca gera
@@ -339,6 +342,38 @@ distintos (98,6% de redundância pura, sempre com o mesmo preço)**, distorcendo
 a mediana usada pela camada de oportunidade (cada anúncio parado no ar pesava
 N vezes, não 1). Corrigido com uma migração automática e retroativa — ver
 seção 4.7.
+
+**Terceira camada, achada em produção em 15/09/2026 (não coberta pelas duas
+acima):** as duas camadas resolvem duplicata *entre* rodadas — o mesmo
+anúncio visto em rodadas diferentes. Nenhuma delas cobria duplicata *dentro*
+da mesma rodada: a paginação da OLX pode repetir um anúncio entre páginas
+diferentes de uma única coleta (destaque reaparecendo, ou os resultados
+mudando de ordem entre a requisição de uma página e a próxima, todas dentro
+de poucos segundos). Reproduzido ao vivo contra a OLX: de 500 anúncios de
+iPhone/ES coletados numa rodada, 3 vieram duplicados.
+
+Antes do fix, isso gerava duas tentativas de `INSERT` em `historico_precos`
+com a mesma chave primária `(listing_id, plataforma, registrado_em)` — a
+mesma `momento` (timestamp) é compartilhada por todos os anúncios de uma
+rodada (`common/storage.py:upsert_ads`, variável `momento`), então dois
+registros do mesmo anúncio na mesma rodada colidem exatamente. A exceção
+`sqlite3.IntegrityError` estourava **dentro da mesma transação** do upsert de
+`anuncios` — como `get_connection()` só dá `commit()` se o bloco `with`
+terminar sem exceção (`common/storage.py:174-184`), o rollback implícito
+descartava a rodada inteira: nem os 497 anúncios sem duplicata eram
+gravados. `scraper/main.py:rodar_coleta` captura a exceção, loga e manda um
+alerta de erro pro Telegram — mas continua rodando (não crasha o processo),
+o que tornava o sintoma fácil de não notar: parece só mais um "possivelmente
+quebrado" no Telegram, não "essa rodada nunca existiu pro banco". É provável
+que parte dos buracos de uptime medidos na seção 7.5 venha daqui, não só da
+máquina hibernando — coleta com container "Up" e HTTP funcionando, mas
+gravação falhando silenciosamente.
+
+Corrigido deduplicando `ads` por `listing_id` logo no início de
+`upsert_ads()`, antes de montar `upsert_rows`/`historico_rows` — a própria
+docstring do módulo promete "uma linha por anúncio", e agora isso vale
+também dentro de uma única rodada, não só entre rodadas. Teste de regressão:
+`tests/test_storage.py::test_listing_duplicado_na_mesma_rodada_nao_quebra_a_rodada_inteira`.
 
 ### 3.6 Mudanças no site — o checkpoint de sanidade
 
@@ -365,7 +400,7 @@ enchendo de lixo.
 
 ### 3.7 Limitações do scraping (documentadas, não escondidas)
 
-Do próprio README (`README.md:76-90`), mais uma observação minha ao vivo:
+Do próprio README (`../README.md:90-104`), mais uma observação minha ao vivo:
 
 - **Partida fria dos alertas de oportunidade.** `common/stats.py` só confia na
   mediana de um grupo com pelo menos `oportunidade_amostra_minima` (5) anúncios
@@ -486,7 +521,7 @@ máquina só, um arquivo único fez sentido pra manter simples").
 
 ### 4.6 Como os dados são persistidos
 
-`upsert_ads()` (`common/storage.py:383-514`) é o coração do storage:
+`upsert_ads()` (`common/storage.py:476-637`) é o coração do storage:
 
 1. `snapshot_estado()` lê o estado atual (`listing_id -> (preço, ativo)`) de
    **todos** os anúncios já vistos **nessa categoria** — filtrar por categoria
@@ -696,7 +731,7 @@ máquina host** — e isso importa de verdade aqui.
 Eu confirmei isso na prática, não só lendo o README: tentei instalar as
 dependências deste projeto localmente, fora do Docker, num ambiente com Python
 3.14 (a única versão instalada nesta máquina hoje). O resultado reproduziu
-exatamente o que o README descreve (`README.md:28-33`):
+exatamente o que o README descreve (`../README.md:42-47`):
 
 ```
 pandas: "Could not find ...vswhere.exe" (tenta compilar via Meson, sem toolchain C)
@@ -790,9 +825,19 @@ duração que você quer conseguir debugar olhando o log ao vivo.
   computador pararam de ser agendados em 12/09/2026 (seção 1), então essas
   duas linhas não têm mais rodada nova sendo produzida. A causa raiz (host
   pessoal que hiberna) segue idêntica pra iPhone, hoje rodando em múltiplas
-  UFs na mesma máquina; uma remedição de uptime pós-pivô não foi feita neste
-  documento — quem for defender o número em entrevista deve rodar a mesma
-  consulta em `coletas` antes, não reusar a tabela abaixo como se fosse atual.
+  UFs na mesma máquina.
+
+  **Remedição de iPhone, feita hoje (15/09/2026), mesma consulta na tabela
+  `coletas`, últimos 7 dias corridos:** 174 rodadas reais de 840 esperadas
+  (a cada 12 min) — **uptime ~21%**, maior buraco de **4 dias e 13,7h**
+  seguidos sem nenhuma rodada (08–13/09/2026). Uptime não melhorou com o
+  pivô pra iPhone (o gargalo sempre foi a máquina hibernar, não a
+  categoria); o número bate no mesmo patamar de antes. Esse buraco de 4,5
+  dias específico é grande demais pra ser só o bug de duplicata-na-mesma-
+  rodada da seção 3.5/9.5#5 (que perde 1 rodada isolada por vez, não vários
+  dias seguidos) — é consistente com a máquina real ficar desligada por um
+  período longo. O dashboard agora expõe esse número ao vivo (KPI "Última
+  coleta" + uptime, seção 8.2), em vez de só existir nesta tabela estática.
 
   Os dois maiores buracos (quase 66h cada) acontecem **no mesmo horário nas 3
   categorias simultaneamente** — não é falha de uma categoria específica, é a
@@ -822,42 +867,64 @@ seguro (seção 4.5).
 ### 8.2 Estado
 
 - **`@st.fragment(run_every=60)`** em `secao_kpis` e `secao_alertas`
-  (`dashboard/app.py:37,57`) — essas duas seções se atualizam sozinhas a cada
-  60s, **sem** re-renderizar a página inteira (diferente de um
+  (`dashboard/app.py:61-62,91-92`) — essas duas seções se atualizam sozinhas a
+  cada 60s, **sem** re-renderizar a página inteira (diferente de um
   `st.rerun()` manual ou de um refresh de browser). O resto da página
   (tendência, mercado, vendas, sobre) só atualiza quando o usuário navega entre
   abas.
 - **Filtro de categoria como estado implícito:** `st.radio` no topo
-  (`dashboard/app.py:275-276`) decide `categoria`, passado como parâmetro pras
+  (`dashboard/app.py:398-406`) decide `categoria`, passado como parâmetro pras
   funções de seção — não há `st.session_state` explícito guardando isso; o
   modelo de execução do Streamlit (reexecuta o script inteiro a cada interação)
   já resolve.
 - **Formulários (`aba Vendas`):** `st.form(..., clear_on_submit=True)` +
-  `st.rerun()` depois de gravar (`dashboard/app.py:207-216`) — limpa o
+  `st.rerun()` depois de gravar (`dashboard/app.py:330-339`) — limpa o
   formulário e força reler o banco imediatamente, sem esperar o próximo ciclo
   de 60s do fragment.
+- **Adicionado em 15/09/2026 — frescor da coleta como KPI:** `secao_kpis`
+  agora tem uma 5ª coluna, "Última coleta" (`_frescor_da_coleta()`,
+  `dashboard/app.py:43-58`), calculada a partir de `carregar_coletas()` —
+  há quantos minutos foi a última rodada, mais uptime dos últimos 7 dias
+  quando uma categoria está selecionada (uptime não é calculado pra "Todas":
+  cada categoria tem sua própria agenda, não faz sentido uma frequência
+  esperada única). Primeira vez que "o dado tá atualizado?" vira número
+  visível no dashboard, em vez de só existir em `coletas`/nesta seção 7.5.
 
 ### 8.3 Filtros
 
-`st.radio("Categoria", ["Monitor", "iPhone", "Computador", "Todas"])` continua
-cobrindo as 3 categorias (`dashboard/app.py:336-337`) — inclusive as
+`st.radio("Categoria", ["iPhone", "Monitor", "Computador", "Todas"])` continua
+cobrindo as 3 categorias (`dashboard/app.py:398`) — inclusive as
 descontinuadas, porque o dashboard explora dado histórico, não só o que está
 sendo coletado agora. `categoria=None` (opção "Todas") remove o filtro `WHERE
-categoria = ?` nas queries (`dashboard/queries.py:12-16`) e nas medianas
-(`common/stats.py:133-143`) — mesma função, tratando ausência de filtro como
+categoria = ?` nas queries (`dashboard/queries.py:12-18`) e nas medianas
+(`common/stats.py:138-161`) — mesma função, tratando ausência de filtro como
 caso explícito, não um valor mágico.
 
-**Adicionado depois da versão original deste documento:** com a categoria
-"iPhone" selecionada, aparece um segundo seletor, `st.radio("Estado", ["Todos"]
-+ ufs_iphone)` (`dashboard/app.py:342-344`), populado a partir de
-`settings.iphone_regioes` — reflexo direto da expansão multi-UF (seção 2.1).
+Com a categoria "iPhone" selecionada, aparece um segundo seletor,
+`st.radio("Estado", ["Todos"] + ufs_iphone)` (`dashboard/app.py:421`),
+populado a partir de `settings.iphone_regioes` — reflexo direto da expansão
+multi-UF (seção 2.1).
+
+**Ordem do radio trocada em 15/09/2026** (era `["Monitor", "iPhone",
+"Computador", "Todas"]`, "Monitor" abria por padrão por ser o primeiro item):
+achado por inspeção visual que a categoria padrão do dashboard era uma
+categoria morta — monitor parou de ser coletado em 12/09/2026, então seus
+anúncios ficam com `ativo=1` congelado (nunca mais re-checados), e a
+"oportunidade" calculada contra a mediana desse grupo (também congelada)
+produzia margens de 300-400% que pareciam outlier de cálculo mas eram, na
+prática, ausência de atualização — ver seção 9.5#6. Corrigido: iPhone (a
+categoria ativa) é o padrão agora, e um `st.warning()` (`dashboard/app.py:407-414`)
+aparece sempre que Monitor, Computador ou Todas é selecionado, explicando
+que aquele dado está congelado.
 
 ### 8.4 Visualização
 
 | Elemento | Onde | O que mostra |
 |---|---|---|
-| KPIs (`st.metric` x4) | `secao_kpis` | Anúncios ativos, oportunidades agora, margem mediana das oportunidades, quedas de preço (7 dias) |
+| KPIs (`st.metric` x5) | `secao_kpis` | Anúncios ativos, oportunidades agora, margem mediana das oportunidades, quedas de preço (7 dias), última coleta (+ caption de uptime) |
 | Tabela de oportunidades | `secao_alertas` | Mesmo critério do Telegram, ordenada por margem % — `st.dataframe` com `column_config` formatando moeda e link clicável |
+| Histograma de distribuição de preço | `charts.grafico_distribuicao_preco` (plotly) | Adicionado em 15/09/2026 — mediana e média marcadas com `add_vline`, explica visualmente por que `common/stats.py` usa mediana (robusta a outlier); primeira coisa em `secao_mercado`, antes dos gráficos que já existiam |
+| Tempo médio no ar | `secao_mercado` (`st.metric` x2) | Adicionado em 15/09/2026 — mediana de dias entre `primeiro_visto_em` e `removido_em` (`queries.carregar_tempo_no_ar`), métrica de ciclo de vida/giro de mercado |
 | Scatter Preço × Hz | `charts.grafico_dispersao_hz` (plotly) | Só pra monitor (precisa de `hz_exato`/`tipo_monitor`) — cor por desvio da mediana do subconjunto |
 | Scatter de tendência de queda | `charts.grafico_tendencia_quedas` (plotly) | Quedas reais ao longo do tempo, tamanho do marcador = % de queda — só existe por causa do schema novo (1 linha por queda real, não por rodada) |
 | `st.bar_chart` x2 | `secao_mercado` | Distribuição por município, marcas/modelos mais frequentes |
@@ -938,10 +1005,10 @@ que o README já documenta e assume, e ela se comporta como documentado.
 
 ### 9.5 Bugs reais corrigidos, como evidência de processo (não só de sorte)
 
-Vale registrar 4 exemplos completos — cada um mostra o mesmo padrão: achado
+Vale registrar 6 exemplos completos — cada um mostra o mesmo padrão: achado
 testando contra dado real (não só em teste automatizado escrito a priori),
-diagnosticado, corrigido, e (nos três primeiros) coberto por teste de
-regressão depois.
+diagnosticado, corrigido, e (em todos exceto o N+1 e o de UX do dashboard)
+coberto por teste de regressão depois.
 
 1. **Divisão por zero no gráfico de tendência** (commit `8ea886d`): um anúncio
    "doação" (R$0) reaparecendo gerava `preco=0` **e** `preco_anterior=0` na
@@ -954,7 +1021,7 @@ regressão depois.
    violar o `NOT NULL` daquela coluna — `upsert_ads()` estourava exceção, a
    rodada inteira da categoria era descartada sem gravar nada. Corrigido não
    tentando gravar histórico quando não há preço pra registrar
-   (`common/storage.py:418-423`).
+   (`common/storage.py:538-543`).
 3. **Grupo genérico corrompendo a mediana de computador**: 19 de 250 anúncios
    sem `cpu_modelo` caíam todos no grupo `"CPU (?)"`, misturando um PC de
    R$450 com um de R$2000+ na mesma mediana — mesma família do bug de marca
@@ -969,6 +1036,42 @@ regressão depois.
    `medianas_todos_grupos()`), com o resto sendo aritmética em Python sobre o
    DataFrame já carregado — é o que o fluxo de requisição da seção 5.3(b)
    descreve hoje.
+5. **Duplicata dentro da mesma rodada quebrando `historico_precos`** (achado
+   e corrigido ao vivo em 15/09/2026, mesma família do bug #2 acima — exceção
+   no upsert descarta a rodada inteira): a paginação da OLX repetiu 3 de 500
+   anúncios de iPhone/ES numa única coleta, gerando duas tentativas de
+   `INSERT` com a mesma chave primária em `historico_precos`
+   (`listing_id, plataforma, registrado_em` — o mesmo `momento` é
+   compartilhado por toda a rodada). `UNIQUE constraint failed`, rollback
+   implícito, rodada inteira perdida sem aviso além de um alerta genérico no
+   Telegram. Corrigido deduplicando `ads` por `listing_id` no início de
+   `upsert_ads()` (`common/storage.py`). Ver seção 3.5 pro detalhe completo
+   e a hipótese de que isso já vinha contribuindo pros buracos de uptime da
+   seção 7.5. Teste:
+   `tests/test_storage.py::test_listing_duplicado_na_mesma_rodada_nao_quebra_a_rodada_inteira`.
+6. **Categoria descontinuada como padrão do dashboard, produzindo margem
+   fantasma** (achado por inspeção visual em 15/09/2026, não por exceção):
+   o seletor de categoria (`dashboard/app.py`) abria em "Monitor" por
+   padrão — uma categoria que parou de ser coletada em 12/09/2026. Como
+   `ativo=1` só é corrigido por uma rodada de coleta que não roda mais pra
+   essa categoria, os anúncios de monitor ficam congelados como "ativos"
+   indefinidamente, e a "oportunidade" calculada contra a mediana desse
+   grupo (também congelada) chegava a 300-400% de margem — não é erro de
+   cálculo, é ausência de atualização mascarada de outlier. Corrigido
+   trocando o padrão pra iPhone e adicionando um `st.warning()` explícito
+   quando Monitor/Computador/Todas é selecionado.
+
+7. **Título contradizendo o modelo, contaminando a mediana** (achado em
+   20/09/2026 explorando o banco): 50 de 3.194 anúncios de iPhone (1,6%)
+   tinham no título uma geração diferente do campo estruturado `modelo` (ex.:
+   "iPhone 18 Pro Max" R$ 13.599 classificado como 17 Pro Max). Entravam na
+   mediana do grupo errado e podiam gerar alerta falso. Corrigido com
+   `titulo_conflita_com_modelo()` em `common/stats.py`, aplicado dos dois
+   lados da conta (mediana e avaliação). Testes em `tests/test_stats.py`.
+8. **Margem de manchete inflada** (20/09/2026): os alertas mostravam 48–105%
+   sobre o custo, comparando com a mediana de preço PEDIDO. Não é bug de
+   cálculo, é escolha de métrica — resolvida mostrando três leituras e
+   marcando margem >60% como suspeita (decisão 14).
 
 ### 9.6 O que não existe
 
@@ -1004,7 +1107,11 @@ escolha — não uma alegação histórica.
 | 10 | Formatar mensagem do Telegram | Markdown (`parse_mode`) / texto puro | Texto puro | Bug real: texto não controlado (título de anúncio, exceção) com `_`/`*` desbalanceado quebrava o envio com erro 400, derrubando o próprio alerta de segurança (commit `955103d`) | Mensagem sem negrito/formatação — só texto corrido |
 | 11 | Intensidade da paginação (`max_paginas`) | Deixar em 5 / moderado (10) / generoso (20+) | 10 (moderado) | Teto de 5 cortava a coleta antes da parada natural, mascarando parte do mercado (commit `c553b83`); usuário escolheu explicitamente "moderado" sobre "generoso" quando perguntado (27/08/2026), alinhado com a filosofia de scraper discreto do README | Observação ao vivo (02/09/2026, não documentada): totais batendo exatamente 500/categoria/rodada de novo — mesmo padrão que motivou subir de 5→10 antes pode estar se repetindo |
 | 12 | Onde hospedar o scraper | PC pessoal (Docker Desktop) / VPS | PC pessoal, com Tailscale registrado como caminho de acesso remoto (não implementado como VPS) | IP de datacenter (Hetzner/Vultr/etc.) tem taxa de bloqueio maior que IP residencial em site com proteção anti-bot ativa como a OLX — risco identificado e decisão registrada explicitamente (auditoria 25–26/08) | Uptime medido em 02/09/2026 em ~19–26% do esperado, com buracos de até 65,9h (número histórico, ver nota na seção 7.5) — a máquina dormir custa janela de oportunidade real, silenciosamente (Docker mostra "Up" mesmo com host suspenso) |
-| 13 | Continuar 3 categorias em paralelo indefinidamente, ou concentrar esforço na que performa | Manter monitor + iPhone + computador / descontinuar as fracas e escalar a forte geograficamente | Descontinuar monitor e computador; escalar iPhone pra múltiplas UFs (`settings.iphone_regioes`) | Código registra o motivo direto: "mercado se mostrou ineficaz" pra monitor/computador (commit `80e4585`, 12/09/2026) — decisão tomada sobre semanas de dado real coletado em paralelo, não intuição (ver seção 1) | Perde a diversificação de categoria (parser modular de `schema.py` ficaria ocioso pras duas); ganha amostra por grupo mais rápida numa única categoria, e testa a hipótese de escala geográfica em vez de escala por produto |
+| 13 | Continuar 3 categorias em paralelo indefinidamente, ou concentrar esforço na que performa | Manter monitor + iPhone + computador / descontinuar as fracas e escalar a forte geograficamente | Descontinuar monitor e computador; iPhone com suporte a múltiplas UFs (só o ES é coletado hoje) (`settings.iphone_regioes`) | Código registra o motivo direto: "mercado se mostrou ineficaz" pra monitor/computador (commit `80e4585`, 12/09/2026) — decisão tomada sobre semanas de dado real coletado em paralelo, não intuição (ver seção 1) | Perde a diversificação de categoria (parser modular de `schema.py` ficaria ocioso pras duas); ganha amostra por grupo mais rápida numa única categoria, e testa a hipótese de escala geográfica em vez de escala por produto |
+| 14 | Como mostrar a margem de um alerta | Só % sobre o custo / três leituras (custo, venda, cenário conservador) | Três leituras + marca ⚠️ acima de `margem_suspeita` (60%) | Em 20/09/2026 os alertas de iPhone tinham margem de 48% a 105% sobre o custo; a mediana do grupo é de preço PEDIDO, e a queda real mediana observada é ~6,3% (aba Resumo) — `desconto_revenda_esperado` | Mensagem mais longa; 6% e 60% são calibrações iniciais, ainda não validadas contra vendas reais |
+| 15 | Anúncio cujo título contradiz o campo `modelo` | Deixar na mediana / excluir | Excluir da mediana e dos alertas (`titulo_conflita_com_modelo`) | 50 de 3.194 anúncios de iPhone (1,6%) em 20/09/2026, ex.: "iPhone 18 Pro Max" dentro do grupo 17 Pro Max; teste em `tests/test_stats.py` | Compara só a geração (não Pro/Max/Plus): conservador, mas deixa passar conflito de variante |
+| 16 | Medir a qualidade dos próprios alertas | Supor / conferência manual registrada | Tabela `conferencias` (+ `descricao` colada pelo usuário), precisão na aba Resumo | Sem conferência, "o sistema apita" nunca vira "o sistema acerta"; a descrição é a matéria-prima pra melhorar a regra (o scraper só lê o título) | Depende do usuário conferir; amostra pequena no começo (aviso <20 na interface) |
+| 17 | Saída pra Power BI / Excel | Conexão direta ao SQLite / CSVs planos | CSVs (`;`, vírgula decimal, UTF-8 com BOM), fatos + dimensão, `dim_anuncios` já com `razao_mediana` | Abre em Excel/Power BI em português sem configurar; a regra de negócio fica em um lugar só (`common/insights.py`) | É um retrato do momento, não conexão viva com o banco |
 
 ---
 
@@ -1018,7 +1125,7 @@ escolha — não uma alegação histórica.
   `fe8f1bf` (27/08/2026), mensagens completas lidas via `git log`.
 - **Suíte de testes**: 97 testes lidos integralmente (não só executados).
 - **Auditoria "Raio-X do Monitor Gamer"**, artifact de 25–26/08/2026 (linkado
-  em `dashboard/app.py:200`, aba "Sobre o negócio") — origem documentada das
+  em `dashboard/app.py:323`, aba "Sobre o negócio") — origem documentada das
   faixas de orçamento por categoria e da análise de distribuição de preço.
 - **Consulta ao vivo ao banco de produção** (`data/olx_monitor.db`), em
   02/09/2026: contagens por categoria, cobertura de amostra por grupo,
@@ -1029,14 +1136,37 @@ escolha — não uma alegação histórica.
 - **Memória de conversas anteriores** deste projeto (datadas): fase atual de
   coleta ampla de dados, preferência por scraping discreto, uptime real da
   infraestrutura, origem do relatório Raio-X.
-- **Revisão de 15/09/2026**, reconciliando o documento original (02/09/2026)
-  com o estado atual do código e do banco: leitura de `common/config.py`,
-  `scraper/main.py` e `dashboard/app.py` como estão hoje; `git show
-  80e4585 -- common/config.py` (mensagem e diff do commit que descontinuou
-  monitor/computador); contagens atuais do banco de produção (15/09/2026):
-  3.967 anúncios únicos (iPhone 2.354, computador 809, monitor 804), 5.530
-  linhas em `historico_precos`, 1.508 linhas em `coletas`, 319 linhas em
-  `medianas_diarias` cobrindo 5 dias distintos com snapshot.
+- **Revisão de 15/09/2026 (parte 1)**, reconciliando o documento original
+  (02/09/2026) com o estado atual do código e do banco: leitura de
+  `common/config.py`, `scraper/main.py` e `dashboard/app.py` como estão
+  hoje; `git show 80e4585 -- common/config.py` (mensagem e diff do commit
+  que descontinuou monitor/computador); contagens do banco de produção
+  naquele momento: 3.967 anúncios únicos (iPhone 2.354, computador 809,
+  monitor 804), 5.530 linhas em `historico_precos`, 1.508 linhas em
+  `coletas`, 319 linhas em `medianas_diarias` cobrindo 5 dias distintos com
+  snapshot.
+- **Revisão de 15/09/2026 (parte 2)**, mais tarde no mesmo dia, depois de
+  rodar o sistema ao vivo (Docker Desktop religado, `docker-compose up`) pra
+  validar dado no dashboard: achado e corrigido o bug de duplicata dentro da
+  mesma rodada (seção 3.5/9.5#5) e o bug de categoria padrão do dashboard
+  (seção 8.3/9.5#6), os dois reproduzidos contra a OLX/banco reais, não só
+  inferidos; suíte de testes crescida de 97 pra 138 (novos testes de
+  regressão em `tests/test_storage.py` e `tests/test_charts.py`);
+  remedição de uptime de iPhone nos últimos 7 dias direto em `coletas`
+  (seção 7.5); contagens atualizadas do banco após a coleta retomar: 4.322
+  anúncios únicos (iPhone 2.709, computador 809, monitor 804), 5.909 linhas
+  em `historico_precos`, 1.513 em `coletas`. Documentação reorganizada em
+  `docs/` (este arquivo incluso) nesta mesma revisão.
+
+- **Revisão de 20/09/2026**, exploração do banco de produção e evolução do
+  dashboard: análise de dispersão por categoria, tempo no ar por faixa de
+  preço, queda real mediana, conflito título x modelo (seção 9.5#7),
+  margem em três leituras (decisão 14), conferência manual de alertas com
+  descrição (decisão 16) e exportação pra BI (decisão 17). Contagens naquele
+  dia: 4.807 anúncios únicos (iPhone 3.194, computador 809, monitor 804),
+  6.517 linhas em `historico_precos`, ~1.600 em `coletas`, 19 dias com coleta
+  em 29 corridos; suíte de 160 testes. Histórico detalhado em
+  `docs/DIARIO_DE_BORDO.md`.
 
 Onde nenhuma dessas fontes tinha resposta, este documento diz isso
 explicitamente ("não determinado pelo código") em vez de inventar uma

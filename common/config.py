@@ -91,6 +91,17 @@ class Settings(BaseSettings):
     # único número verificável antes de negociar).
     desconto_negociacao_esperado: float = 0.10
 
+    # --- Margem honesta ---
+    # A mediana do grupo é de preço PEDIDO, não de preço de venda. A queda
+    # real mediana de preço observada em iPhone foi ~6,3% (aba Resumo do
+    # dashboard, 20/09/2026) -- usada como desconto esperado na REVENDA, pra
+    # mostrar uma margem conservadora ao lado da otimista.
+    desconto_revenda_esperado: float = 0.06
+    # Margem sobre o custo acima disso é mais provável defeito escondido
+    # ("leia descrição", iCloud, bateria) do que oportunidade -- o alerta
+    # continua saindo, mas marcado pra conferir antes de ir.
+    margem_suspeita: float = 0.60
+
     # --- Orçamento máximo por categoria (teto de preço, não de margem) ---
     # Por mais boa que a margem % pareça, acima disso não vira notificação --
     # fora da faixa que você realmente compraria. Chutes iniciais a partir

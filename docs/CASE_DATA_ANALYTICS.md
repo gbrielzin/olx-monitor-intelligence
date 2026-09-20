@@ -126,18 +126,19 @@ só deixava esse anúncio aparecer como "melhor oportunidade" do catálogo.
 
 ## Principais resultados
 
-Números direto do banco de produção (consulta em 15/09/2026, janela de
-coleta desde 23/08/2026):
+Números direto do banco de produção (consulta em 20/09/2026, janela de
+coleta desde 23/08/2026, 19 dias com coleta em 29 corridos):
 
 | Métrica | Valor |
 |---|---|
-| Anúncios únicos rastreados | 3.967 |
-| — iPhone | 2.354 |
+| Anúncios únicos rastreados | 4.807 |
+| — iPhone | 3.194 |
 | — computador completo | 809 |
 | — monitor | 804 |
-| Quedas de preço reais capturadas (histórico, não só estado atual) | 5.530 |
-| Rodadas de coleta registradas (com checkpoint de sanidade cada uma) | 1.508 |
-| Dias com snapshot de mediana gravado (`medianas_diarias`) | 5 (recurso mais recente) |
+| Movimentações de preço registradas (`historico_precos`) | 6.517 |
+| — dessas, quedas reais de preço | 576 (341 em iPhone) |
+| Rodadas de coleta registradas (com checkpoint de sanidade cada uma) | 1.595 |
+| Dias com snapshot de mediana gravado (`medianas_diarias`) | 8 |
 
 **A decisão mais relevante do ponto de vista de análise de dado**: o
 projeto começou coletando 3 categorias em paralelo de propósito — período
@@ -150,11 +151,59 @@ registra o motivo da mudança (`common/config.py`, commit
 > ineficaz)"
 
 Ou seja: **o dado coletado indicou que essas duas categorias não sustentam
-a tese de arbitragem** (produto commodity, preço já convergido, sem
-dispersão suficiente pra virar oportunidade real) — decisão tomada olhando
+a tese de arbitragem** (ver a análise de dispersão logo abaixo: a
+"oportunidade" aparente em monitor/computador vinha em boa parte de grupos
+heterogêneos, não de mercado mal precificado) — decisão tomada olhando
 histórico real, não intuição — e o esforço foi redirecionado pra iPhone,
-agora escalado pra **múltiplas regiões (UFs) na mesma execução**, cada uma
-com seu próprio canal de alerta.
+com suporte a **múltiplas regiões (UFs) na mesma execução** (variável
+`IPHONE_REGIOES`, cada uma com seu próprio canal de alerta) — mas hoje só o
+Espírito Santo é de fato coletado.
+
+### O que os dados acumulados mostram (aba "Resumo" do dashboard)
+
+Análises em `common/insights.py`, calculadas ao vivo (consulta de 20/09/2026).
+Todas descritivas, não causais — as limitações estão em cada item.
+
+1. **Dispersão alta não é oportunidade.** Monitor tem ~23% dos anúncios
+   abaixo de 75% da mediana do grupo; iPhone, ~5%. Mas o grupo do monitor
+   (marca + tipo) é heterogêneo: separar por polegadas derruba o coeficiente
+   de variação de 0,43 pra 0,33. Boa parte da "oportunidade" em monitor
+   parece ser grupo mal definido, não mercado ineficiente. O grupo do iPhone
+   (modelo + armazenamento) é homogêneo (CV ~0,15) — um preço 25% abaixo da
+   mediana ali é um sinal mais limpo. *Isto refina a explicação anterior de
+   "mercado eficiente demais": a decisão de descontinuar se mantém, o
+   motivo é mais preciso.*
+2. **O limiar de 75% separa algo real.** Entre os iPhones que já saíram do
+   ar, os anunciados a ≤75% da mediana ficaram ~1,9 dia (n=115), contra ~3,0
+   dias nas demais faixas. Ressalvas: venda e desanúncio se confundem, só
+   entram anúncios que já saíram (viés de sobrevivência) e a coleta
+   irregular quantiza as durações.
+3. **Negociação esperada vs. observada.** O sistema assume 10% de desconto
+   na conversa. Nos dados, a queda real mediana de preço num anúncio de iPhone
+   é ~6,3% (285 anúncios, ~9% do total) — um proxy (queda no anúncio não é
+   desconto na negociação), mas um número de mercado pra comparar com um
+   parâmetro que antes era só suposto.
+4. **Conflito título x modelo.** 50 anúncios de iPhone (1,6%) tinham o
+   título citando uma geração diferente do campo `modelo` da OLX
+   (ex.: "iPhone 18 Pro Max" dentro do grupo 17 Pro Max). Passam a ficar
+   fora da mediana e dos alertas (`titulo_conflita_com_modelo`,
+   `common/stats.py`), com teste.
+
+### Margem sem inflar e precisão medida
+
+- **Três leituras de margem.** O alerta mostra a margem sobre o custo (a mais
+  alta, 48–105% nos alertas de 20/09), sobre a venda e um cenário conservador
+  (revenda 6% abaixo da mediana, a queda real observada). Margem >60% sobre o
+  custo vem marcada ⚠️: preço muito baixo costuma ser defeito escondido.
+- **Conferência manual.** Cada alerta pode ser conferido no anúncio real
+  (veredito, motivo do falso alarme e a descrição colada pelo usuário). A aba
+  Resumo reporta "X de Y alertas eram reais" e analisa as descrições dos
+  falsos pra propor regra nova. Sem conferências ainda em 20/09/2026 — o
+  número de precisão só existe depois disso.
+- **Saída pra BI.** CSVs planos (fatos + dimensão) pra Power BI/Excel; ver
+  `scripts/exportar_bi.py` e a aba "Dados (BI)".
+- **Cobertura da coleta** medida e discutida em
+  [`COLETA_CONTINUA.md`](COLETA_CONTINUA.md).
 
 ## Qualidade e governança de dado
 
@@ -178,12 +227,54 @@ propósito (inclusive as falhas já encontradas e corrigidas):
   tamanho de amostra e enviesando o "preço justo" pro anúncio mais antigo
   no ar — corrigido mudando a granularidade pra 1 linha por anúncio (não
   por rodada de coleta). Ver `common/storage.py`.
+- **Segundo bug real de dado, corrigido em 15/09/2026, achado rodando o
+  sistema ao vivo**: a paginação da OLX às vezes repete um anúncio entre
+  páginas diferentes da MESMA rodada (destaque reaparecendo, ou os
+  resultados mudando de ordem entre uma requisição de página e outra).
+  Isso gerava duas linhas de `historico_precos` com a mesma chave
+  primária — violava a UNIQUE constraint e descartava **a rodada inteira**
+  (nem os anúncios sem duplicata eram gravados), silenciosamente, com um
+  alerta de erro no Telegram como único rastro. Reproduzido contra a OLX
+  ao vivo (3 de 500 anúncios vieram duplicados numa única rodada),
+  corrigido com dedup por `listing_id` em `upsert_ads()`
+  (`common/storage.py`), com teste de regressão. Fechar esse tipo de bug é
+  também o que sustenta o uptime medido abaixo — parte dos "buracos" de
+  coleta provavelmente vinha daqui, não só da máquina hibernando.
+- **Terceiro achado, de UX/confiabilidade do dashboard**: o seletor de
+  categoria abria por padrão em "Monitor" — uma categoria descontinuada
+  cujos anúncios ficam com `ativo=1` congelado (nunca mais são
+  re-checados, já que a categoria parou de ser coletada). Resultado:
+  margem calculada contra mediana **de dado morto**, produzindo números
+  de 300-400% que pareciam erro de cálculo mas eram, na verdade, ausência
+  de atualização. Corrigido trocando o padrão pra iPhone (a categoria
+  ativa) e adicionando um aviso explícito quando Monitor/Computador/Todas
+  é selecionado.
 - **Limitação de infraestrutura documentada com número real, não
   estimativa**: a coleta roda numa máquina pessoal, não um servidor sempre
   ligado — uptime medido diretamente na tabela `coletas` (não é uma
   suposição), com buracos de dezenas de horas quando a máquina hiberna.
   Detalhe completo, com a query e a tabela de números, em
-  `OLX_DEEP_DIVE.md`, seção 7.5.
+  `OLX_DEEP_DIVE.md`, seção 7.5. O próprio dashboard agora expõe esse
+  número ao vivo (ver seção seguinte), em vez de deixá-lo só no código.
+
+## Métricas do dashboard (frescor, ciclo de vida, distribuição)
+
+Adicionadas em 15/09/2026, depois de olhar o dashboard e perceber que
+"dado válido tecnicamente" e "dado confiável agora" são perguntas
+diferentes — a segunda não tinha métrica nenhuma até então:
+
+- **Frescor da coleta** — no topo, sempre visível: há quanto tempo foi a
+  última rodada + uptime real dos últimos 7 dias (rodadas reais / rodadas
+  esperadas, medido em `coletas`, não estimado). Trata "o dado tá
+  atualizado?" como métrica de primeira classe, não como suposição.
+- **Tempo médio no ar** — mediana de dias que um anúncio fica ativo antes
+  de sumir da busca (`primeiro_visto_em` até `removido_em`), por categoria
+  — métrica de ciclo de vida/giro de mercado.
+- **Distribuição de preço** — histograma com mediana e média marcadas,
+  por grupo filtrado. Explica visualmente por que `common/stats.py` usa
+  mediana (robusta a outlier) em vez de média, e é também a primeira
+  pista visual de quando uma categoria tem dado congelado — a mesma causa
+  raiz do segundo bug listado acima.
 
 ## Como executar
 
@@ -216,4 +307,4 @@ PYTHONPATH=. pytest tests/ -v
   conexão via ODBC) facilitaria plugar em Power BI/Excel sem reescrever a
   camada de análise.
 - Roadmap completo de produto (bicicletas/ferramentas, produtização) no
-  [`README.md`](README.md#roadmap-próximos-passos-já-pensados-não-implementados).
+  [`README.md`](../README.md#roadmap-próximos-passos-já-pensados-não-implementados).

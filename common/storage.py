@@ -162,6 +162,37 @@ CREATE TABLE IF NOT EXISTS auditoria_ia (
 );
 """
 
+# Conferência manual de alerta: o usuário abre o anúncio de verdade e anota se
+# a oportunidade era real. É o que permite reportar "X de Y alertas conferidos
+# eram reais" -- precisão medida, não suposta. Fica fora de _SCHEMA base pra o
+# dashboard (que não roda init_db) poder criar a tabela sozinho.
+DDL_CONFERENCIAS = """
+CREATE TABLE IF NOT EXISTS conferencias (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id INTEGER NOT NULL,
+    plataforma TEXT NOT NULL DEFAULT 'olx',
+    titulo TEXT,
+    preco REAL,
+    mediana_grupo REAL,
+    margem_pct REAL,
+    veredito TEXT NOT NULL,
+    motivo TEXT,
+    conferido_em TEXT NOT NULL,
+    descricao TEXT
+);
+"""
+_SCHEMA += DDL_CONFERENCIAS
+
+
+def garantir_conferencias(conn: sqlite3.Connection) -> None:
+    """Cria a tabela e, se ela já existia sem `descricao` (versão anterior),
+    acrescenta a coluna -- o dashboard não roda init_db, então a migração
+    precisa poder ser chamada de fora."""
+    conn.executescript(DDL_CONFERENCIAS)
+    colunas = {r[1] for r in conn.execute("PRAGMA table_info(conferencias)")}
+    if "descricao" not in colunas:
+        conn.execute("ALTER TABLE conferencias ADD COLUMN descricao TEXT")
+
 _COLUNAS_ANUNCIO = (
     "listing_id, plataforma, categoria, grupo, titulo, preco, preco_antigo, url, data_publicacao, "
     "municipio, bairro, uf, marca, condicao, polegadas, resolucao_max, faixa_hz, "

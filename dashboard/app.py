@@ -1,14 +1,51 @@
 import pandas as pd
 import streamlit as st
 
-from charts import grafico_dispersao_hz, grafico_tendencia_quedas
+from charts import (
+    grafico_dispersao_categorias,
+    grafico_dispersao_hz,
+    grafico_distribuicao_preco,
+    grafico_tempo_no_ar_por_faixa,
+    grafico_tendencia_quedas,
+)
 from common.config import settings
+from common.export import para_csv_bytes, tabelas_para_bi
+from common.insights import (
+    analise_descricoes,
+    cobertura_coleta,
+    conflitos_titulo_modelo,
+    dispersao_por_categoria,
+    maiores_buracos,
+    precisao_alertas,
+    resumo_quedas,
+    tempo_no_ar_por_faixa,
+)
 from common.stats import avaliar_preco, margem_e_confiavel, medianas_todos_grupos
-from queries import carregar_ativos, carregar_coletas, carregar_novidades, carregar_quedas_precos
+from queries import (
+    carregar_ativos,
+    carregar_coletas,
+    carregar_novidades,
+    carregar_quedas_precos,
+    carregar_tempo_no_ar,
+    carregar_todos_anuncios,
+    carregar_ultima_coleta_por_categoria,
+)
+from conferencias import MOTIVOS_FALSO, VEREDITOS, carregar_conferencias, registrar_conferencia
 from vendas import carregar_vendas, marcar_como_vendido, registrar_compra
 
-st.set_page_config(page_title="iPhone — OLX multi-estado", layout="wide")
+st.set_page_config(page_title="OLX Monitor Intelligence", layout="wide")
 st.title("Inteligência de mercado (OLX)")
+
+
+def _regioes_txt() -> str:
+    """Nome das regiões de iPhone REALMENTE configuradas (`IPHONE_REGIOES`,
+    ou o ES padrão) -- o texto do dashboard descreve o que roda, não o que
+    o código suportaria."""
+    return ", ".join(r.nome for r in settings.iphone_regioes)
+
+
+def _data_br(ts: pd.Timestamp | None) -> str:
+    return ts.tz_convert("America/Sao_Paulo").strftime("%d/%m/%Y") if ts is not None else "—"
 
 
 def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
@@ -21,17 +58,39 @@ def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
     avaliacoes = [
         avaliar_preco(preco, medianas[(categoria, grupo)], categoria)
         if pd.notna(preco) and (categoria, grupo) in medianas
-           and margem_e_confiavel(condicao, titulo, preco, categoria)
+           and margem_e_confiavel(condicao, titulo, preco, categoria, modelo if pd.notna(modelo) else None)
         else None
-        for preco, categoria, grupo, condicao, titulo in zip(
-            df["preco"], df["categoria"], df["grupo"], df["condicao"], df["titulo"]
+        for preco, categoria, grupo, condicao, titulo, modelo in zip(
+            df["preco"], df["categoria"], df["grupo"], df["condicao"], df["titulo"], df["modelo"]
         )
     ]
     df["oportunidade"] = [a.eh_oportunidade if a else False for a in avaliacoes]
     df["apos_negociar"] = [a.custo_apos_negociacao if a else None for a in avaliacoes]
     df["margem_rs"] = [a.margem_rs if a else None for a in avaliacoes]
     df["margem_pct"] = [a.margem_pct * 100 if a else None for a in avaliacoes]
+    df["margem_venda_pct"] = [a.margem_sobre_venda_pct * 100 if a else None for a in avaliacoes]
+    df["margem_conservadora_rs"] = [a.margem_conservadora_rs if a else None for a in avaliacoes]
+    df["mediana_grupo"] = [a.mediana if a else None for a in avaliacoes]
+    df["suspeita"] = [a.suspeita if a else False for a in avaliacoes]
     return df
+
+
+def _frescor_da_coleta(categoria: str | None, uf: str | None) -> tuple[str, str | None]:
+    """(texto da última coleta, uptime dos últimos 7 dias em % ou None).
+    Uptime só é calculado com uma categoria escolhida -- cada categoria tem
+    sua própria agenda (monitor/computador pararam de rodar,
+    ver docs/CASE_DATA_ANALYTICS.md), então misturar todas sob 'Todas' não tem
+    uma frequência esperada única pra comparar contra."""
+    coletas = carregar_coletas(dias=7, categoria=categoria, uf=uf)
+    if coletas.empty:
+        return "—", None
+    ultima = pd.to_datetime(coletas["coletado_em"]).max()
+    delta_min = (pd.Timestamp.now(tz="UTC") - ultima).total_seconds() / 60
+    texto = f"há {delta_min:.0f} min" if delta_min < 60 else f"há {delta_min / 60:.1f}h"
+    if categoria is None:
+        return texto, None
+    esperadas = 7 * 24 * 60 / settings.scrape_interval_minutes
+    return texto, len(coletas) / esperadas * 100
 
 
 @st.fragment(run_every=60)
@@ -43,8 +102,9 @@ def secao_kpis(categoria: str | None, uf: str | None = None) -> None:
     df = _com_avaliacao(df)
     oportunidades = df[df["oportunidade"]]
     quedas_7d = carregar_quedas_precos(dias=7, categoria=categoria, uf=uf)
+    ultima_coleta, uptime = _frescor_da_coleta(categoria, uf)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Anúncios ativos", len(df))
     col2.metric("Oportunidades agora", len(oportunidades))
     col3.metric(
@@ -52,6 +112,15 @@ def secao_kpis(categoria: str | None, uf: str | None = None) -> None:
         f"R$ {oportunidades['margem_rs'].median():.0f}" if not oportunidades.empty else "—",
     )
     col4.metric("Quedas de preço (7 dias)", len(quedas_7d))
+    col5.metric("Última coleta", ultima_coleta)
+    if uptime is not None:
+        st.caption(
+            f"Uptime da coleta (7 dias, {categoria}): {uptime:.0f}% das rodadas "
+            f"esperadas a cada {settings.scrape_interval_minutes} min — medido "
+            "direto na tabela `coletas`, não é estimativa. Coleta roda numa "
+            "máquina pessoal, não um servidor sempre ligado (ver "
+            "docs/OLX_DEEP_DIVE.md, seção 7.5)."
+        )
 
 
 @st.fragment(run_every=60)
@@ -86,9 +155,20 @@ def secao_alertas(categoria: str | None, uf: str | None = None) -> None:
         f"mediana do grupo. Não é o preço final, é ponto de partida pra negociar."
         f"{nota_orcamento}"
     )
+    st.caption(
+        f"Margem em três leituras: **sobre o custo** (a mais alta, ROI), **sobre a venda** e o "
+        f"**cenário conservador** (revenda {settings.desconto_revenda_esperado:.0%} abaixo da mediana, "
+        f"a queda real observada). Acima de {settings.margem_suspeita:.0%} sobre o custo o anúncio vem "
+        "marcado ⚠️ — preço muito baixo costuma ser defeito escondido (descrição, bateria, bloqueio), "
+        "não pechincha."
+    )
+    oportunidades = oportunidades.assign(
+        alerta=oportunidades["suspeita"].map({True: "⚠️ conferir", False: ""})
+    )
     st.dataframe(
         oportunidades[
-            ["categoria", "uf", "titulo", "preco", "apos_negociar", "margem_rs", "margem_pct",
+            ["alerta", "categoria", "uf", "titulo", "preco", "apos_negociar", "margem_rs", "margem_pct",
+             "margem_venda_pct", "margem_conservadora_rs",
              "condicao", "saude_bateria", "inclui_monitor", "marca", "municipio", "url"]
         ].sort_values("margem_pct", ascending=False),
         use_container_width=True,
@@ -100,7 +180,10 @@ def secao_alertas(categoria: str | None, uf: str | None = None) -> None:
             "preco": st.column_config.NumberColumn("Anunciado", format="R$ %.0f"),
             "apos_negociar": st.column_config.NumberColumn("Após negociar", format="R$ %.0f"),
             "margem_rs": st.column_config.NumberColumn("Margem", format="R$ %.0f"),
-            "margem_pct": st.column_config.NumberColumn("Margem %", format="%.0f%%"),
+            "margem_pct": st.column_config.NumberColumn("Margem % (custo)", format="%.0f%%"),
+            "margem_venda_pct": st.column_config.NumberColumn("Margem % (venda)", format="%.0f%%"),
+            "margem_conservadora_rs": st.column_config.NumberColumn("Margem conservadora", format="R$ %.0f"),
+            "alerta": "Alerta",
             "condicao": "Condição",
             "saude_bateria": "Bateria",
             "inclui_monitor": "Inclui monitor?",
@@ -109,6 +192,37 @@ def secao_alertas(categoria: str | None, uf: str | None = None) -> None:
             "url": st.column_config.LinkColumn("Link", display_text="abrir"),
         },
     )
+    _form_conferencia(oportunidades)
+
+
+def _form_conferencia(oportunidades: pd.DataFrame) -> None:
+    """Abre o anúncio de verdade, confere, anota. É daqui que sai a métrica
+    de precisão dos alertas (aba Resumo)."""
+    with st.expander("✅ Conferi um alerta no anúncio real"):
+        opcoes = {
+            f"{r.titulo[:60]} — R$ {r.preco:.0f}": r for r in oportunidades.itertuples()
+        }
+        escolha = st.selectbox("Qual alerta", list(opcoes.keys()), key="conf_alerta")
+        veredito = st.radio(
+            "Resultado", list(VEREDITOS.keys()), format_func=VEREDITOS.get, horizontal=True, key="conf_veredito"
+        )
+        motivo = None
+        if veredito == "falso":
+            motivo = st.selectbox("Por que falhou", MOTIVOS_FALSO, key="conf_motivo")
+        descricao = st.text_area(
+            "O que aparece na descrição do anúncio (copie e cole)",
+            key="conf_descricao",
+            help="É a matéria-prima pra melhorar a regra: o scraper só lê o título, "
+            "e é na descrição que costuma estar o defeito, o bloqueio, a bateria.",
+        )
+        if st.button("Registrar conferência"):
+            r = opcoes[escolha]
+            registrar_conferencia(
+                int(r.listing_id), veredito, titulo=r.titulo, preco=float(r.preco),
+                mediana_grupo=float(r.mediana_grupo), margem_pct=float(r.margem_pct), motivo=motivo,
+                descricao=descricao,
+            )
+            st.success("Conferência registrada — entra na precisão dos alertas (aba Resumo).")
 
 
 def secao_tendencia(categoria: str | None, uf: str | None = None) -> None:
@@ -147,6 +261,34 @@ def secao_mercado(categoria: str | None, uf: str | None = None) -> None:
     if df.empty:
         st.info("Sem anúncios ativos ainda.")
         return
+
+    st.subheader("Distribuição de preço")
+    sufixo = f" — {categoria}" if categoria else ""
+    fig_dist = grafico_distribuicao_preco(df, sufixo)
+    if fig_dist:
+        st.plotly_chart(fig_dist, use_container_width=True)
+        st.caption(
+            "Mediana (verde) é a régua usada por `common/stats.py` pra decidir "
+            "oportunidade -- não a média (vermelho), que qualquer anúncio muito "
+            "fora da curva puxa pra um lado."
+        )
+
+    tempo_no_ar = carregar_tempo_no_ar(categoria, uf)
+    if not tempo_no_ar.empty:
+        dias = (
+            pd.to_datetime(tempo_no_ar["removido_em"]) - pd.to_datetime(tempo_no_ar["primeiro_visto_em"])
+        ).dt.total_seconds() / 86400
+        dias = dias[dias >= 0]
+        if not dias.empty:
+            st.subheader("Tempo médio no ar")
+            c1, c2 = st.columns(2)
+            c1.metric("Mediana", f"{dias.median():.1f} dias")
+            c2.metric("Amostra", len(dias))
+            st.caption(
+                "Quanto tempo, em média, um anúncio fica no catálogo antes de "
+                "sumir da busca (não diferencia venda de desanúncio -- o "
+                "scraper só sabe que parou de aparecer)."
+            )
 
     # só existe pra monitor (precisa de hz_exato/tipo_monitor) -- pra
     # iPhone a lista de tipos vem vazia e o loop não roda, sem quebrar.
@@ -231,17 +373,198 @@ def secao_auditoria(categoria: str | None, uf: str | None = None) -> None:
     )
 
 
+def secao_resumo() -> None:
+    """A história que os dados acumulados contam -- toda a numeração é
+    calculada ao vivo (nada digitado à mão), via `common/insights.py`."""
+    todos = carregar_todos_anuncios()
+    if todos.empty:
+        st.info("Ainda sem dados coletados.")
+        return
+    coletas = carregar_coletas(dias=3650)
+    cob = cobertura_coleta(coletas)
+    iphone = todos[todos["categoria"] == "iphone"]
+    quedas = resumo_quedas(carregar_quedas_precos(dias=3650, categoria="iphone"), len(iphone))
+    primeira = pd.to_datetime(coletas["coletado_em"]).min() if not coletas.empty else None
+
+    st.subheader(f"O que {len(todos):,} anúncios e {cob['dias_janela']} dias de coleta mostram".replace(",", "."))
+    st.caption(
+        f"Região coletada: {_regioes_txt()}. Janela: {_data_br(primeira)} até hoje. "
+        "Tudo calculado ao vivo a partir do banco."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Anúncios únicos", f"{len(todos):,}".replace(",", "."))
+    c2.metric("Rodadas de coleta", f"{cob['rodadas']:,}".replace(",", "."))
+    c3.metric("Dias com coleta", f"{cob['dias_com_coleta']} de {cob['dias_janela']}")
+    c4.metric("Quedas de preço reais (iPhone)", quedas["quedas"])
+
+    st.markdown("### 1. Dispersão alta não é oportunidade")
+    disp = dispersao_por_categoria(todos)
+    if not disp.empty:
+        fig = grafico_dispersao_categorias(disp)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        linhas = {r.categoria: r for r in disp.itertuples()}
+        ip, mon = linhas.get("iphone"), linhas.get("monitor")
+        if ip is not None and mon is not None:
+            refino = (
+                f"Só de separar o grupo por polegadas, o coeficiente de variação cai de "
+                f"**{mon.cv_mediano:.2f}** para **{mon.cv_refinado:.2f}** — sinal de que parte da "
+                "\"oportunidade\" pode ser grupo mal definido, não mercado ineficiente. "
+                if pd.notna(mon.cv_refinado) else ""
+            )
+            st.markdown(
+                f"Monitor tem **{mon.pct_abaixo_limiar:.0f}%** dos anúncios abaixo de "
+                f"{settings.oportunidade_limiar:.0%} da mediana do grupo; iPhone, **{ip.pct_abaixo_limiar:.0f}%**. "
+                "À primeira vista, monitor seria o melhor mercado — mas o grupo dele "
+                "(marca + tipo) mistura tamanhos e specs. "
+                f"{refino}"
+                f"O grupo do iPhone (modelo + armazenamento) é bem mais homogêneo "
+                f"(CV **{ip.cv_mediano:.2f}**), então um preço 25% abaixo da mediana ali é um sinal mais limpo."
+            )
+        rotulo_pct = f"% ≤{settings.oportunidade_limiar:.0%} da mediana"
+        st.dataframe(
+            disp.rename(columns={
+                "categoria": "Categoria", "anuncios": "Anúncios", "grupos": "Grupos",
+                "cv_mediano": "CV mediano", "cv_refinado": "CV refinado",
+                "pct_abaixo_limiar": rotulo_pct,
+            }),
+            hide_index=True, use_container_width=True,
+            column_config={
+                "CV mediano": st.column_config.NumberColumn(format="%.2f"),
+                "CV refinado": st.column_config.NumberColumn(format="%.2f"),
+                rotulo_pct: st.column_config.NumberColumn(format="%.1f%%"),
+            },
+        )
+
+    st.markdown(f"### 2. Anúncio abaixo de {settings.oportunidade_limiar:.0%} da mediana some mais rápido?")
+    faixas = tempo_no_ar_por_faixa(todos, "iphone")
+    if not faixas.empty:
+        fig = grafico_tempo_no_ar_por_faixa(faixas, settings.oportunidade_limiar)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        rotulo_op = f"≤{settings.oportunidade_limiar:.0%}"
+        destaque = faixas[faixas["faixa"] == rotulo_op]
+        demais = faixas[faixas["faixa"] != rotulo_op]
+        if not destaque.empty and destaque["anuncios"].iloc[0] > 0 and demais["anuncios"].sum() > 0:
+            d = float(destaque["mediana_dias"].iloc[0])
+            resto = float((demais["mediana_dias"] * demais["anuncios"]).sum() / demais["anuncios"].sum())
+            sentido = "menos" if d < resto else "mais"
+            st.markdown(
+                f"iPhones anunciados a ≤{settings.oportunidade_limiar:.0%} da mediana ficam **{d:.1f} dias** no ar "
+                f"(n={int(destaque['anuncios'].iloc[0])}), contra ~**{resto:.1f} dias** nas demais faixas — "
+                f"{sentido} tempo."
+            )
+        st.caption(
+            "Leitura descritiva, não causal: o scraper só sabe que o anúncio parou de aparecer "
+            "(venda e desanúncio se confundem), só entram anúncios que já saíram (viés de "
+            "sobrevivência), e a coleta irregular quantiza as durações."
+        )
+
+    st.markdown("### 3. Quanto o vendedor realmente cede?")
+    if quedas["mediana_pct"] is not None:
+        st.markdown(
+            f"Em **{quedas['anuncios_com_queda']}** anúncios de iPhone "
+            f"({quedas['pct_anuncios']:.0f}% do total) houve queda real de preço; a queda "
+            f"mediana foi de **{quedas['mediana_pct']:.1f}%**. O sistema assume "
+            f"**{settings.desconto_negociacao_esperado:.0%}** de negociação ao estimar a margem — "
+            "um parâmetro que estava só suposto e agora tem um número de mercado pra comparar."
+        )
+        st.caption("Queda no anúncio (o vendedor baixa o preço) não é o mesmo que desconto na conversa — é um proxy.")
+    else:
+        st.info("Ainda sem quedas de preço registradas.")
+
+    st.markdown("### 4. Qualidade do dado")
+    conflitos = conflitos_titulo_modelo(iphone)
+    total_ip = max(len(iphone), 1)
+    st.markdown(
+        f"**{len(conflitos)}** anúncios de iPhone ({len(conflitos) / total_ip:.1%}) têm um título que cita "
+        "uma geração diferente do campo `modelo` da OLX. Eles ficam **fora** da mediana e dos alertas — "
+        "sem isso, um anúncio de \"iPhone 18 Pro Max\" de R$ 13 mil entrava no grupo do 17 Pro Max e "
+        "puxava o preço de referência."
+    )
+    if not conflitos.empty:
+        with st.expander("Ver os anúncios excluídos"):
+            st.dataframe(
+                conflitos[["titulo", "modelo", "preco", "url"]], hide_index=True, use_container_width=True,
+                column_config={
+                    "titulo": "Título", "modelo": "Modelo (OLX)",
+                    "preco": st.column_config.NumberColumn("Preço", format="R$ %.0f"),
+                    "url": st.column_config.LinkColumn("Link", display_text="abrir"),
+                },
+            )
+
+    st.markdown("### 5. Os alertas acertam?")
+    prec = precisao_alertas(carregar_conferencias())
+    if prec["conferidos"] == 0:
+        st.info(
+            "Nenhum alerta conferido ainda. Na aba Oportunidades, abra o anúncio real e registre se a "
+            "oportunidade era verdadeira — é assim que \"o sistema apita\" vira \"o sistema acerta\"."
+        )
+    else:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Alertas conferidos", prec["conferidos"])
+        c2.metric("Oportunidades reais", prec["reais"])
+        c3.metric(
+            "Precisão",
+            f"{prec['precisao_pct']:.0f}%" if prec["precisao_pct"] is not None else "—",
+            help="reais / (reais + falsos). Os inconclusivos ficam fora da conta.",
+        )
+        if prec["motivos"]:
+            st.caption("Por que os falsos alarmes falharam: " + "; ".join(f"{m} ({n})" for m, n in prec["motivos"].items()))
+        if prec["conferidos"] < 20:
+            st.caption("Amostra pequena (<20): trate como indicativo, não como taxa.")
+        desc = analise_descricoes(carregar_conferencias())
+        if desc["com_descricao"]:
+            pegaria, total_f = desc["falsos_que_a_regra_pegaria"]
+            with st.expander(f"O que as descrições dizem ({desc['com_descricao']} coladas)"):
+                if total_f:
+                    st.markdown(
+                        f"A regra atual de defeito teria barrado **{pegaria} de {total_f}** falsos alarmes "
+                        "se lesse a descrição (hoje só lê o título)."
+                    )
+                if desc["termos_falsos"]:
+                    st.markdown("Palavras mais comuns nos falsos alarmes e raras nos reais (candidatas a regra):")
+                    st.dataframe(
+                        pd.DataFrame(desc["termos_falsos"], columns=["Termo", "Nos falsos", "Nos reais"]),
+                        hide_index=True, use_container_width=True,
+                    )
+
+    st.markdown("### Limitações")
+    buracos_txt = "; ".join(
+        f"{ini.tz_convert('America/Sao_Paulo').strftime('%d/%m %Hh')} → {h:.0f}h parado"
+        for ini, h in maiores_buracos(coletas)
+    ) or "sem dados"
+    st.markdown(
+        f"- **Cobertura:** coleta em {cob['dias_com_coleta']} de {cob['dias_janela']} dias — roda num PC "
+        "pessoal, não num servidor. Buracos de horas ou dias existem e estão na tabela `coletas`.\n"
+        f"- **Maiores buracos:** {buracos_txt}\n"
+        "- **Uma região:** só o estado configurado é coletado; conclusões não se estendem a outros estados.\n"
+        "- **Descritivo:** nenhuma análise acima prova causa. O backtest formal (o alerta antecipou mesmo uma "
+        "queda de preço?) depende de mais histórico em `medianas_diarias`."
+    )
+
+
+def secao_dados_bi() -> None:
+    st.caption(
+        "Tabelas planas (CSV com `;` e vírgula decimal, abrem direto no Excel/Power BI em português). "
+        "`dim_anuncios` já vai com `razao_mediana` e `confiavel` calculados pela mesma régua do sistema."
+    )
+    for nome, df in tabelas_para_bi().items():
+        c1, c2 = st.columns([3, 1])
+        c1.write(f"**{nome}** — {len(df):,} linhas".replace(",", "."))
+        c2.download_button("Baixar CSV", para_csv_bytes(df), file_name=f"{nome}.csv", mime="text/csv", key=f"dl_{nome}")
+
+
 def secao_sobre() -> None:
     st.markdown(
         rf"""
 Sistema de arbitragem informacional: monitora anúncios de **iPhone** na
-OLX, em múltiplos estados, a cada {settings.scrape_interval_minutes} min,
-calcula a mediana de mercado de cada grupo (modelo+armazenamento — separada
-por estado, um iPhone de SP não compete pela mesma mediana que um do ES),
-e avisa quando um anúncio aparece — ou baixa de preço — a
-**{settings.oportunidade_limiar:.0%} da mediana do grupo ou menos**. Cada
-estado pode ter seu próprio grupo do Telegram recebendo os alertas — a
-região pessoal do administrador fica só no chat pessoal.
+OLX, a cada {settings.scrape_interval_minutes} min, hoje em **{_regioes_txt()}**,
+calcula a mediana de mercado de cada grupo (modelo+armazenamento, separada
+por estado) e avisa quando um anúncio aparece — ou baixa de preço — a
+**{settings.oportunidade_limiar:.0%} da mediana do grupo ou menos**. O código
+suporta vários estados (variável `IPHONE_REGIOES`, cada um com seu grupo do
+Telegram), mas só as regiões acima são de fato coletadas.
 
 **A tese:** parte do mercado de usados é ineficiente — vendedor urgente ou
 desinformado anuncia abaixo do preço justo. Achar isso manualmente, na hora
@@ -333,8 +656,29 @@ def secao_vendas() -> None:
     )
 
 
-categoria_label = st.radio("Categoria", ["Monitor", "iPhone", "Computador", "Todas"], horizontal=True)
-categoria = {"Monitor": "monitor", "iPhone": "iphone", "Computador": "computador", "Todas": None}[categoria_label]
+categoria_label = st.radio(
+    "Categoria", ["iPhone", "Monitor", "Computador", "Todas"], horizontal=True,
+    help="iPhone é a única categoria ainda coletada -- Monitor e Computador "
+    "pararam de ser agendados (ver docs/CASE_DATA_ANALYTICS.md) e ficam com "
+    "dado congelado: os anúncios continuam marcados como ativos mesmo sem "
+    "confirmação recente de que ainda estão no ar, então oportunidade/margem "
+    "ali não são confiáveis. O aviso abaixo mostra a data da última coleta.",
+)
+categoria = {"iPhone": "iphone", "Monitor": "monitor", "Computador": "computador", "Todas": None}[categoria_label]
+_ultimas = carregar_ultima_coleta_por_categoria()
+_ultima_iphone = _ultimas.get("iphone")
+_congeladas = {
+    cat: ts for cat, ts in _ultimas.items()
+    if cat != "iphone" and _ultima_iphone is not None and (_ultima_iphone - ts).days >= 2
+}
+if categoria in _congeladas or (categoria is None and _congeladas):
+    _detalhe = ", ".join(f"{c} (última coleta {_data_br(t)})" for c, t in _congeladas.items())
+    st.warning(
+        f"⚠️ Categoria(s) sem coleta nova: {_detalhe}. Os anúncios ficam com o último "
+        "estado visto (não são re-checados), então margem/oportunidade aqui refletem "
+        "dado congelado, não o mercado agora.",
+        icon="⚠️",
+    )
 
 # Seletor de Estado só aparece com mais de 1 região de iPhone configurada
 # -- sem isso (hoje: só ES), nada muda visualmente no dashboard.
@@ -346,9 +690,13 @@ if categoria == "iphone" and len(ufs_iphone) > 1:
 
 secao_kpis(categoria, uf)
 
-tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas, tab_auditoria, tab_sobre = st.tabs(
-    ["🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas", "🩺 Auditoria", "ℹ️ Sobre o negócio"]
+(tab_resumo, tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas,
+ tab_auditoria, tab_dados, tab_sobre) = st.tabs(
+    ["📖 Resumo", "🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas",
+     "🩺 Auditoria", "📤 Dados (BI)", "ℹ️ Sobre o negócio"]
 )
+with tab_resumo:
+    secao_resumo()
 with tab_oportunidades:
     secao_alertas(categoria, uf)
 with tab_tendencia:
@@ -359,5 +707,7 @@ with tab_vendas:
     secao_vendas()
 with tab_auditoria:
     secao_auditoria(categoria, uf)
+with tab_dados:
+    secao_dados_bi()
 with tab_sobre:
     secao_sobre()

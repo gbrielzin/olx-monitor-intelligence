@@ -1,6 +1,6 @@
 import pandas as pd
 
-from dashboard.charts import grafico_tendencia_quedas
+from dashboard.charts import grafico_distribuicao_preco, grafico_tendencia_quedas
 
 
 def _linha(preco_anterior, preco, listing_id=1):
@@ -71,3 +71,21 @@ def test_grafico_tendencia_quedas_caso_normal_gera_figura():
     fig = grafico_tendencia_quedas(df)
     assert fig is not None
     assert len(fig.data[0].x) == 2
+
+
+def test_grafico_distribuicao_preco_vazio_retorna_none():
+    assert grafico_distribuicao_preco(pd.DataFrame({"preco": []})) is None
+
+
+def test_grafico_distribuicao_preco_ignora_linha_sem_preco():
+    df = pd.DataFrame({"preco": [100.0, None, 300.0]})
+    fig = grafico_distribuicao_preco(df)
+    assert fig is not None
+    assert len(fig.data[0].x) == 2
+
+
+def test_grafico_distribuicao_preco_marca_mediana_e_media_como_vlines():
+    df = pd.DataFrame({"preco": [100.0, 200.0, 900.0]})  # média (400) != mediana (200)
+    fig = grafico_distribuicao_preco(df)
+    xs_vlines = sorted(shape["x0"] for shape in fig.layout.shapes)
+    assert xs_vlines == [200.0, 400.0]

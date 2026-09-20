@@ -530,3 +530,57 @@ def test_tendencia_grupo_um_dia_disponivel_e_indeterminado(tmp_path):
     assert t.dias_disponiveis == 1
     assert t.direcao == "indeterminado"
     assert t.amostra_periodo == 5
+
+
+def test_titulo_conflita_com_modelo_detecta_geracao_diferente():
+    """Achado ao vivo (20/09/2026): título "iPhone 17 Pro Max" com o campo
+    estruturado dizendo 16 Pro Max -- entrava na mediana do grupo errado."""
+    from common.stats import titulo_conflita_com_modelo
+
+    assert titulo_conflita_com_modelo("Vendo iPhone 17 Pro Max 256gb", "IPHONE 16 PRO MAX")
+    assert titulo_conflita_com_modelo("iPhone 13 128GB com caixa", "IPHONE 11")
+    assert titulo_conflita_com_modelo("iPhone XS 64gb", "IPHONE XR")
+
+
+def test_titulo_conflita_com_modelo_nao_dispara_sem_conflito_real():
+    from common.stats import titulo_conflita_com_modelo
+
+    # mesma geração, variante diferente (Pro/Max) -- deliberadamente NÃO conflita
+    assert not titulo_conflita_com_modelo("iPhone 13 Pro Max", "IPHONE 13")
+    # título sem geração reconhecível, ou modelo ausente: sem base pra acusar
+    assert not titulo_conflita_com_modelo("Celular Apple novo lacrado", "IPHONE 14")
+    assert not titulo_conflita_com_modelo("iPhone 14", None)
+    assert not titulo_conflita_com_modelo(None, "IPHONE 14")
+    # várias gerações no título ("vendo 14, troco por 17"): só conflita se nenhuma bate
+    assert not titulo_conflita_com_modelo("Vendo iPhone 14, troco por iPhone 17", "IPHONE 14")
+    assert titulo_conflita_com_modelo("Vendo iPhone 14, troco por iPhone 17", "IPHONE 12")
+
+
+def test_margem_e_confiavel_exclui_conflito_titulo_modelo():
+    from common.stats import margem_e_confiavel
+
+    assert margem_e_confiavel("Usado - Bom", "iPhone 13", 2000.0, "iphone", "IPHONE 13")
+    assert not margem_e_confiavel("Usado - Bom", "iPhone 17 Pro", 3400.0, "iphone", "IPHONE 13 PRO MAX")
+    # sem `modelo` (todo chamador antigo) o comportamento não muda
+    assert margem_e_confiavel("Usado - Bom", "iPhone 17 Pro", 3400.0, "iphone")
+
+
+def test_avaliar_preco_devolve_tres_leituras_de_margem():
+    """Margem sobre o custo (ROI) infla o número de manchete: R$315 sobre
+    R$585 é 54%, mas só 35% sobre a venda de R$900."""
+    from common.stats import avaliar_preco
+
+    av = avaliar_preco(650.0, 900.0, "iphone")
+    assert round(av.custo_apos_negociacao) == 585
+    assert round(av.margem_pct, 2) == 0.54
+    assert round(av.margem_sobre_venda_pct, 2) == 0.35
+    # conservador: revende a 900 * (1 - 6%) = 846 -> 846 - 585 = 261
+    assert round(av.margem_conservadora_rs) == 261
+    assert not av.suspeita
+
+
+def test_avaliar_preco_marca_margem_alta_como_suspeita():
+    from common.stats import avaliar_preco
+
+    av = avaliar_preco(650.0, 1200.0, "iphone")  # ~105% sobre o custo
+    assert av.suspeita and av.eh_oportunidade

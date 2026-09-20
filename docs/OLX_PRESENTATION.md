@@ -6,7 +6,7 @@
 > reconstruída para soar natural em inglês.
 >
 > Revisado em 15/09/2026 para refletir o estado atual do projeto: iPhone é hoje
-> a única categoria ativa, rodando em múltiplas UFs — monitor gamer e
+> a única categoria ativa, coletada hoje só no Espírito Santo (o código suporta várias UFs) — monitor gamer e
 > computador completo foram as categorias originais do MVP e permanecem no
 > histórico do banco, mas pararam de ser coletadas depois que o próprio dado
 > mostrou mercado eficiente demais pra sustentar a tese (detalhe na seção
@@ -45,7 +45,7 @@ categoria. Um dashboard em Streamlit permite explorar os dados, ver tendência
 de preço, e registrar manualmente o que foi de fato comprado e revendido, para
 comparar a margem estimada com a margem real.
 
-**Estado atual: iPhone, em múltiplas UFs.** O MVP testou três categorias em
+**Estado atual: iPhone, no Espírito Santo (código pronto pra múltiplas UFs).** O MVP testou três categorias em
 paralelo (monitor gamer, iPhone, computador completo) por semanas — decisão
 deliberada, para ter dado amplo antes de fechar regra de negócio por
 categoria. Monitor e computador foram descontinuados depois que o dado
@@ -169,7 +169,7 @@ a registrar, no commit que parou de agendar as duas primeiras, o motivo direto:
 "mercado se mostrou ineficaz". Ou seja, a decisão de descontinuar duas
 categorias e concentrar esforço em iPhone veio do dado coletado, não de
 intuição inicial — e o esforço liberado foi pra escalar a categoria que
-performou, geograficamente (múltiplas UFs), em vez de abrir uma quarta
+performou (com suporte a múltiplas UFs já no código, ainda só o ES coletado), em vez de abrir uma quarta
 categoria de produto.
 
 ## Limitações
