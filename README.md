@@ -10,15 +10,58 @@ preço por grupo.
 estados na mesma execução (variável `IPHONE_REGIOES`, cada um com seu
 próprio grupo de alerta), mas só o ES é coletado hoje. Monitor gamer e
 computador completo foram as categorias originais do MVP: rodaram em
-paralelo por semanas, mas o próprio dado coletado mostrou mercado
-eficiente demais pra sustentar a tese de arbitragem, e foram
-descontinuadas (código ainda existe, só parou de ser agendado — ver
+paralelo por semanas, mas o próprio dado coletado mostrou que a
+"oportunidade" aparente vinha de grupos heterogêneos, não de mercado
+mal precificado, e foram descontinuadas (código ainda existe, só parou de ser agendado — ver
 `common/config.py`). A decisão e os números por trás dela estão em
 [`docs/CASE_DATA_ANALYTICS.md`](docs/CASE_DATA_ANALYTICS.md).
 
 > Pra profundidade técnica de backend/infra, ver
 > [`docs/OLX_DEEP_DIVE.md`](docs/OLX_DEEP_DIVE.md). Documentação completa
 > em [`docs/`](docs/).
+
+## Em uma página
+
+**Pergunta:** dá pra transformar "achar boa oferta de usado" num problema de
+dados — coletar sistematicamente, definir um preço de referência confiável e
+avisar quando um anúncio foge muito dele?
+
+**O que roda:** coleta (a cada 12 min) → validação (Pydantic) → banco
+(SQLite) → mediana por grupo comparável → alerta no Telegram → dashboard
+(Streamlit). Escopo atual: iPhone, Espírito Santo.
+
+**O que os dados mostraram** (aba *Resumo* do dashboard, calculada ao vivo):
+
+- Monitor parecia ter mais "oportunidade" que iPhone (23% vs 5% dos anúncios
+  abaixo de 75% da mediana), mas o grupo dele é heterogêneo — dispersão não é
+  oportunidade.
+- iPhones anunciados a ≤75% da mediana somem do ar em ~1,9 dia, contra ~3,0
+  nas demais faixas (descritivo, com ressalvas documentadas).
+- A queda real mediana de preço é ~6,3%; o sistema assumia 10% de negociação.
+- 1,6% dos anúncios tinham título e modelo contraditórios — agora fora da
+  mediana.
+
+**Margem sem inflar:** o alerta mostra três leituras (sobre o custo, sobre a
+venda e um cenário conservador) e marca ⚠️ a margem acima de 60% — preço muito
+baixo costuma ser defeito escondido, não pechincha.
+
+**Precisão medida, não suposta:** cada alerta pode ser conferido no anúncio
+real (aba *Oportunidades*); a aba *Resumo* mostra "X de Y alertas conferidos
+eram reais" e por que os falsos falharam.
+
+**Para BI:** a aba *Dados (BI)* e `scripts/exportar_bi.py` exportam CSVs
+(fatos e dimensão) que abrem direto no Excel/Power BI.
+
+**Limitações, de frente:** coleta num PC pessoal (cobertura irregular, medida
+na tabela `coletas`), uma região, análises descritivas — ver
+[`docs/COLETA_CONTINUA.md`](docs/COLETA_CONTINUA.md) e
+[`docs/CASE_DATA_ANALYTICS.md`](docs/CASE_DATA_ANALYTICS.md).
+
+<!-- PRINTS (adicionar quando capturados, em docs/img/):
+![Alerta no Telegram](docs/img/telegram-alerta.png)
+![Aba Resumo](docs/img/dashboard-resumo.png)
+![Oportunidades](docs/img/dashboard-oportunidades.png)
+-->
 
 ## Como rodar
 
