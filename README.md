@@ -6,8 +6,9 @@ avisa por Telegram quando um anúncio aparece — ou cai de preço —
 abaixo dele, com um dashboard Streamlit pra acompanhar tendência de
 preço por grupo.
 
-**Hoje ativo pra iPhone, em múltiplas UFs** (uma execução cobre vários
-estados, cada um com seu próprio grupo de alerta). Monitor gamer e
+**Hoje ativo pra iPhone, só no Espírito Santo.** O código suporta vários
+estados na mesma execução (variável `IPHONE_REGIOES`, cada um com seu
+próprio grupo de alerta), mas só o ES é coletado hoje. Monitor gamer e
 computador completo foram as categorias originais do MVP: rodaram em
 paralelo por semanas, mas o próprio dado coletado mostrou mercado
 eficiente demais pra sustentar a tese de arbitragem, e foram

@@ -64,7 +64,7 @@ Regras pra montar o bloco:
 ## Contexto do projeto
 
 Sistema de arbitragem informacional que monitora anúncios usados na OLX.
-Hoje ativo pra iPhone, em múltiplas UFs. Monitor gamer e computador
+Hoje ativo pra iPhone, só no ES (código suporta múltiplas UFs). Monitor gamer e computador
 completo foram testados e descontinuados (mercado se mostrou ineficaz —
 ver `common/config.py` e `docs/CASE_DATA_ANALYTICS.md`).
 

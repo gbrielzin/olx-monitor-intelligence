@@ -126,18 +126,19 @@ só deixava esse anúncio aparecer como "melhor oportunidade" do catálogo.
 
 ## Principais resultados
 
-Números direto do banco de produção (consulta em 15/09/2026, janela de
-coleta desde 23/08/2026):
+Números direto do banco de produção (consulta em 20/09/2026, janela de
+coleta desde 23/08/2026, 19 dias com coleta em 29 corridos):
 
 | Métrica | Valor |
 |---|---|
-| Anúncios únicos rastreados | 4.322 |
-| — iPhone | 2.709 |
+| Anúncios únicos rastreados | 4.807 |
+| — iPhone | 3.194 |
 | — computador completo | 809 |
 | — monitor | 804 |
-| Quedas de preço reais capturadas (histórico, não só estado atual) | 5.909 |
-| Rodadas de coleta registradas (com checkpoint de sanidade cada uma) | 1.513 |
-| Dias com snapshot de mediana gravado (`medianas_diarias`) | 6 |
+| Movimentações de preço registradas (`historico_precos`) | 6.517 |
+| — dessas, quedas reais de preço | 576 (341 em iPhone) |
+| Rodadas de coleta registradas (com checkpoint de sanidade cada uma) | 1.595 |
+| Dias com snapshot de mediana gravado (`medianas_diarias`) | 8 |
 
 **A decisão mais relevante do ponto de vista de análise de dado**: o
 projeto começou coletando 3 categorias em paralelo de propósito — período
@@ -150,11 +151,43 @@ registra o motivo da mudança (`common/config.py`, commit
 > ineficaz)"
 
 Ou seja: **o dado coletado indicou que essas duas categorias não sustentam
-a tese de arbitragem** (produto commodity, preço já convergido, sem
-dispersão suficiente pra virar oportunidade real) — decisão tomada olhando
+a tese de arbitragem** (ver a análise de dispersão logo abaixo: a
+"oportunidade" aparente em monitor/computador vinha em boa parte de grupos
+heterogêneos, não de mercado mal precificado) — decisão tomada olhando
 histórico real, não intuição — e o esforço foi redirecionado pra iPhone,
-agora escalado pra **múltiplas regiões (UFs) na mesma execução**, cada uma
-com seu próprio canal de alerta.
+com suporte a **múltiplas regiões (UFs) na mesma execução** (variável
+`IPHONE_REGIOES`, cada uma com seu próprio canal de alerta) — mas hoje só o
+Espírito Santo é de fato coletado.
+
+### O que os dados acumulados mostram (aba "Resumo" do dashboard)
+
+Análises em `common/insights.py`, calculadas ao vivo (consulta de 20/09/2026).
+Todas descritivas, não causais — as limitações estão em cada item.
+
+1. **Dispersão alta não é oportunidade.** Monitor tem ~23% dos anúncios
+   abaixo de 75% da mediana do grupo; iPhone, ~5%. Mas o grupo do monitor
+   (marca + tipo) é heterogêneo: separar por polegadas derruba o coeficiente
+   de variação de 0,43 pra 0,33. Boa parte da "oportunidade" em monitor
+   parece ser grupo mal definido, não mercado ineficiente. O grupo do iPhone
+   (modelo + armazenamento) é homogêneo (CV ~0,15) — um preço 25% abaixo da
+   mediana ali é um sinal mais limpo. *Isto refina a explicação anterior de
+   "mercado eficiente demais": a decisão de descontinuar se mantém, o
+   motivo é mais preciso.*
+2. **O limiar de 75% separa algo real.** Entre os iPhones que já saíram do
+   ar, os anunciados a ≤75% da mediana ficaram ~1,9 dia (n=115), contra ~3,0
+   dias nas demais faixas. Ressalvas: venda e desanúncio se confundem, só
+   entram anúncios que já saíram (viés de sobrevivência) e a coleta
+   irregular quantiza as durações.
+3. **Negociação esperada vs. observada.** O sistema assume 10% de desconto
+   na conversa. Nos dados, a queda real mediana de preço num anúncio de iPhone
+   é ~6,3% (285 anúncios, ~9% do total) — um proxy (queda no anúncio não é
+   desconto na negociação), mas um número de mercado pra comparar com um
+   parâmetro que antes era só suposto.
+4. **Conflito título x modelo.** 50 anúncios de iPhone (1,6%) tinham o
+   título citando uma geração diferente do campo `modelo` da OLX
+   (ex.: "iPhone 18 Pro Max" dentro do grupo 17 Pro Max). Passam a ficar
+   fora da mediana e dos alertas (`titulo_conflita_com_modelo`,
+   `common/stats.py`), com teste.
 
 ## Qualidade e governança de dado
 
