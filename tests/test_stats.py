@@ -563,3 +563,24 @@ def test_margem_e_confiavel_exclui_conflito_titulo_modelo():
     assert not margem_e_confiavel("Usado - Bom", "iPhone 17 Pro", 3400.0, "iphone", "IPHONE 13 PRO MAX")
     # sem `modelo` (todo chamador antigo) o comportamento não muda
     assert margem_e_confiavel("Usado - Bom", "iPhone 17 Pro", 3400.0, "iphone")
+
+
+def test_avaliar_preco_devolve_tres_leituras_de_margem():
+    """Margem sobre o custo (ROI) infla o número de manchete: R$315 sobre
+    R$585 é 54%, mas só 35% sobre a venda de R$900."""
+    from common.stats import avaliar_preco
+
+    av = avaliar_preco(650.0, 900.0, "iphone")
+    assert round(av.custo_apos_negociacao) == 585
+    assert round(av.margem_pct, 2) == 0.54
+    assert round(av.margem_sobre_venda_pct, 2) == 0.35
+    # conservador: revende a 900 * (1 - 6%) = 846 -> 846 - 585 = 261
+    assert round(av.margem_conservadora_rs) == 261
+    assert not av.suspeita
+
+
+def test_avaliar_preco_marca_margem_alta_como_suspeita():
+    from common.stats import avaliar_preco
+
+    av = avaliar_preco(650.0, 1200.0, "iphone")  # ~105% sobre o custo
+    assert av.suspeita and av.eh_oportunidade

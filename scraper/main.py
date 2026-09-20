@@ -56,6 +56,22 @@ def _linha_extra(ad) -> str:
     return ""
 
 
+def _linhas_margem(av: Avaliacao) -> str:
+    """Margem em três leituras, não uma: sobre o custo (a mais alta), sobre
+    a venda e num cenário conservador (revende abaixo da mediana pedida).
+    Margem acima de `margem_suspeita` vem marcada -- preço muito baixo
+    costuma ser defeito escondido, não pechincha."""
+    texto = (
+        f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%} sobre o custo · "
+        f"{av.margem_sobre_venda_pct:.0%} sobre a venda)\n"
+        f"Cenário conservador (revenda -{settings.desconto_revenda_esperado:.0%}): "
+        f"R$ {av.margem_conservadora_rs:.0f}\n"
+    )
+    if av.suspeita:
+        texto += "⚠️ Margem alta demais pra ser normal — confira descrição, bateria e bloqueio antes de ir\n"
+    return texto
+
+
 def _msg_novo(ad, av: Avaliacao) -> str:
     return (
         f"💰 Oportunidade (novo anúncio) — {ad.titulo}\n"
@@ -63,7 +79,7 @@ def _msg_novo(ad, av: Avaliacao) -> str:
         f"{_linha_extra(ad)}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
         f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
-        f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%})\n"
+        f"{_linhas_margem(av)}"
         f"{ad.url}"
     )
 
@@ -77,7 +93,7 @@ def _msg_queda(ad, av: Avaliacao, preco_anterior: float, novo_minimo: bool) -> s
         f"{_linha_extra(ad)}\n"
         f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
         f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
-        f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%})\n"
+        f"{_linhas_margem(av)}"
         f"{ad.url}"
     )
 

@@ -330,8 +330,11 @@ class Avaliacao:
     mediana: float
     custo_apos_negociacao: float
     margem_rs: float
-    margem_pct: float
+    margem_pct: float  # sobre o CUSTO (ROI) -- a mais alta das três leituras
     eh_oportunidade: bool
+    margem_sobre_venda_pct: float = 0.0  # mesma margem, sobre o preço de revenda
+    margem_conservadora_rs: float = 0.0  # revendendo a mediana - desconto_revenda_esperado
+    suspeita: bool = False  # margem_pct acima de settings.margem_suspeita
 
 
 def _dentro_do_orcamento(preco: float, categoria: Optional[str]) -> bool:
@@ -354,6 +357,7 @@ def avaliar_preco(preco: float, mediana: float, categoria: Optional[str] = None)
     margem_rs = mediana - custo
     margem_pct = margem_rs / custo if custo > 0 else 0.0
     dentro_do_limiar = preco <= mediana * settings.oportunidade_limiar
+    revenda_conservadora = mediana * (1 - settings.desconto_revenda_esperado)
     return Avaliacao(
         preco=preco,
         mediana=mediana,
@@ -361,6 +365,9 @@ def avaliar_preco(preco: float, mediana: float, categoria: Optional[str] = None)
         margem_rs=margem_rs,
         margem_pct=margem_pct,
         eh_oportunidade=dentro_do_limiar and _dentro_do_orcamento(preco, categoria),
+        margem_sobre_venda_pct=margem_rs / mediana if mediana > 0 else 0.0,
+        margem_conservadora_rs=revenda_conservadora - custo,
+        suspeita=margem_pct > settings.margem_suspeita,
     )
 
 
