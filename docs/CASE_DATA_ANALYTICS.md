@@ -189,6 +189,22 @@ Todas descritivas, não causais — as limitações estão em cada item.
    fora da mediana e dos alertas (`titulo_conflita_com_modelo`,
    `common/stats.py`), com teste.
 
+### Margem sem inflar e precisão medida
+
+- **Três leituras de margem.** O alerta mostra a margem sobre o custo (a mais
+  alta, 48–105% nos alertas de 20/09), sobre a venda e um cenário conservador
+  (revenda 6% abaixo da mediana, a queda real observada). Margem >60% sobre o
+  custo vem marcada ⚠️: preço muito baixo costuma ser defeito escondido.
+- **Conferência manual.** Cada alerta pode ser conferido no anúncio real
+  (veredito, motivo do falso alarme e a descrição colada pelo usuário). A aba
+  Resumo reporta "X de Y alertas eram reais" e analisa as descrições dos
+  falsos pra propor regra nova. Sem conferências ainda em 20/09/2026 — o
+  número de precisão só existe depois disso.
+- **Saída pra BI.** CSVs planos (fatos + dimensão) pra Power BI/Excel; ver
+  `scripts/exportar_bi.py` e a aba "Dados (BI)".
+- **Cobertura da coleta** medida e discutida em
+  [`COLETA_CONTINUA.md`](COLETA_CONTINUA.md).
+
 ## Qualidade e governança de dado
 
 Pontos que normalmente ficam escondidos e aqui estão documentados de

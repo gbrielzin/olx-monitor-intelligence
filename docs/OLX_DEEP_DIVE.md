@@ -1061,6 +1061,18 @@ coberto por teste de regressão depois.
    trocando o padrão pra iPhone e adicionando um `st.warning()` explícito
    quando Monitor/Computador/Todas é selecionado.
 
+7. **Título contradizendo o modelo, contaminando a mediana** (achado em
+   20/09/2026 explorando o banco): 50 de 3.194 anúncios de iPhone (1,6%)
+   tinham no título uma geração diferente do campo estruturado `modelo` (ex.:
+   "iPhone 18 Pro Max" R$ 13.599 classificado como 17 Pro Max). Entravam na
+   mediana do grupo errado e podiam gerar alerta falso. Corrigido com
+   `titulo_conflita_com_modelo()` em `common/stats.py`, aplicado dos dois
+   lados da conta (mediana e avaliação). Testes em `tests/test_stats.py`.
+8. **Margem de manchete inflada** (20/09/2026): os alertas mostravam 48–105%
+   sobre o custo, comparando com a mediana de preço PEDIDO. Não é bug de
+   cálculo, é escolha de métrica — resolvida mostrando três leituras e
+   marcando margem >60% como suspeita (decisão 14).
+
 ### 9.6 O que não existe
 
 Pra ser preciso sobre limitações de qualidade, não só sobre pontos fortes: não
@@ -1095,7 +1107,11 @@ escolha — não uma alegação histórica.
 | 10 | Formatar mensagem do Telegram | Markdown (`parse_mode`) / texto puro | Texto puro | Bug real: texto não controlado (título de anúncio, exceção) com `_`/`*` desbalanceado quebrava o envio com erro 400, derrubando o próprio alerta de segurança (commit `955103d`) | Mensagem sem negrito/formatação — só texto corrido |
 | 11 | Intensidade da paginação (`max_paginas`) | Deixar em 5 / moderado (10) / generoso (20+) | 10 (moderado) | Teto de 5 cortava a coleta antes da parada natural, mascarando parte do mercado (commit `c553b83`); usuário escolheu explicitamente "moderado" sobre "generoso" quando perguntado (27/08/2026), alinhado com a filosofia de scraper discreto do README | Observação ao vivo (02/09/2026, não documentada): totais batendo exatamente 500/categoria/rodada de novo — mesmo padrão que motivou subir de 5→10 antes pode estar se repetindo |
 | 12 | Onde hospedar o scraper | PC pessoal (Docker Desktop) / VPS | PC pessoal, com Tailscale registrado como caminho de acesso remoto (não implementado como VPS) | IP de datacenter (Hetzner/Vultr/etc.) tem taxa de bloqueio maior que IP residencial em site com proteção anti-bot ativa como a OLX — risco identificado e decisão registrada explicitamente (auditoria 25–26/08) | Uptime medido em 02/09/2026 em ~19–26% do esperado, com buracos de até 65,9h (número histórico, ver nota na seção 7.5) — a máquina dormir custa janela de oportunidade real, silenciosamente (Docker mostra "Up" mesmo com host suspenso) |
-| 13 | Continuar 3 categorias em paralelo indefinidamente, ou concentrar esforço na que performa | Manter monitor + iPhone + computador / descontinuar as fracas e escalar a forte geograficamente | Descontinuar monitor e computador; escalar iPhone pra múltiplas UFs (`settings.iphone_regioes`) | Código registra o motivo direto: "mercado se mostrou ineficaz" pra monitor/computador (commit `80e4585`, 12/09/2026) — decisão tomada sobre semanas de dado real coletado em paralelo, não intuição (ver seção 1) | Perde a diversificação de categoria (parser modular de `schema.py` ficaria ocioso pras duas); ganha amostra por grupo mais rápida numa única categoria, e testa a hipótese de escala geográfica em vez de escala por produto |
+| 13 | Continuar 3 categorias em paralelo indefinidamente, ou concentrar esforço na que performa | Manter monitor + iPhone + computador / descontinuar as fracas e escalar a forte geograficamente | Descontinuar monitor e computador; iPhone com suporte a múltiplas UFs (só o ES é coletado hoje) (`settings.iphone_regioes`) | Código registra o motivo direto: "mercado se mostrou ineficaz" pra monitor/computador (commit `80e4585`, 12/09/2026) — decisão tomada sobre semanas de dado real coletado em paralelo, não intuição (ver seção 1) | Perde a diversificação de categoria (parser modular de `schema.py` ficaria ocioso pras duas); ganha amostra por grupo mais rápida numa única categoria, e testa a hipótese de escala geográfica em vez de escala por produto |
+| 14 | Como mostrar a margem de um alerta | Só % sobre o custo / três leituras (custo, venda, cenário conservador) | Três leituras + marca ⚠️ acima de `margem_suspeita` (60%) | Em 20/09/2026 os alertas de iPhone tinham margem de 48% a 105% sobre o custo; a mediana do grupo é de preço PEDIDO, e a queda real mediana observada é ~6,3% (aba Resumo) — `desconto_revenda_esperado` | Mensagem mais longa; 6% e 60% são calibrações iniciais, ainda não validadas contra vendas reais |
+| 15 | Anúncio cujo título contradiz o campo `modelo` | Deixar na mediana / excluir | Excluir da mediana e dos alertas (`titulo_conflita_com_modelo`) | 50 de 3.194 anúncios de iPhone (1,6%) em 20/09/2026, ex.: "iPhone 18 Pro Max" dentro do grupo 17 Pro Max; teste em `tests/test_stats.py` | Compara só a geração (não Pro/Max/Plus): conservador, mas deixa passar conflito de variante |
+| 16 | Medir a qualidade dos próprios alertas | Supor / conferência manual registrada | Tabela `conferencias` (+ `descricao` colada pelo usuário), precisão na aba Resumo | Sem conferência, "o sistema apita" nunca vira "o sistema acerta"; a descrição é a matéria-prima pra melhorar a regra (o scraper só lê o título) | Depende do usuário conferir; amostra pequena no começo (aviso <20 na interface) |
+| 17 | Saída pra Power BI / Excel | Conexão direta ao SQLite / CSVs planos | CSVs (`;`, vírgula decimal, UTF-8 com BOM), fatos + dimensão, `dim_anuncios` já com `razao_mediana` | Abre em Excel/Power BI em português sem configurar; a regra de negócio fica em um lugar só (`common/insights.py`) | É um retrato do momento, não conexão viva com o banco |
 
 ---
 
@@ -1141,6 +1157,16 @@ escolha — não uma alegação histórica.
   anúncios únicos (iPhone 2.709, computador 809, monitor 804), 5.909 linhas
   em `historico_precos`, 1.513 em `coletas`. Documentação reorganizada em
   `docs/` (este arquivo incluso) nesta mesma revisão.
+
+- **Revisão de 20/09/2026**, exploração do banco de produção e evolução do
+  dashboard: análise de dispersão por categoria, tempo no ar por faixa de
+  preço, queda real mediana, conflito título x modelo (seção 9.5#7),
+  margem em três leituras (decisão 14), conferência manual de alertas com
+  descrição (decisão 16) e exportação pra BI (decisão 17). Contagens naquele
+  dia: 4.807 anúncios únicos (iPhone 3.194, computador 809, monitor 804),
+  6.517 linhas em `historico_precos`, ~1.600 em `coletas`, 19 dias com coleta
+  em 29 corridos; suíte de 160 testes. Histórico detalhado em
+  `docs/DIARIO_DE_BORDO.md`.
 
 Onde nenhuma dessas fontes tinha resposta, este documento diz isso
 explicitamente ("não determinado pelo código") em vez de inventar uma

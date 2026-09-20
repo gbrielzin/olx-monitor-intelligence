@@ -78,3 +78,8 @@ convenção de ferramenta, não mover):
 - `docs/OLX_DEEP_DIVE.md` — documentação técnica aprofundada (arquitetura,
   scraping, banco, decisões).
 - `docs/OLX_PRESENTATION.md` — apresentação do projeto em prosa (PT/EN).
+- `docs/DIARIO_DE_BORDO.md` — diário de desenvolvimento por data: o que foi
+  feito, achados, decisões e a lista do que ainda falta. **Ler primeiro ao
+  retomar o trabalho** e atualizar no fim de cada sessão.
+- `docs/COLETA_CONTINUA.md` — como aumentar a cobertura da coleta (PC
+  pessoal vs. VPS).
