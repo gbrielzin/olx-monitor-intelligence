@@ -89,3 +89,55 @@ def grafico_tendencia_quedas(df: pd.DataFrame):
     )
     fig.update_yaxes(rangemode="tozero")
     return fig
+
+
+def grafico_tempo_no_ar_por_faixa(df: pd.DataFrame, limiar: float):
+    """Barras: mediana de dias no ar por faixa de preço vs mediana do grupo.
+    A faixa ≤ limiar é a que o sistema chama de oportunidade -- ela vem
+    destacada pra a comparação com as demais ser a primeira coisa que se
+    vê."""
+    if df.empty:
+        return None
+    destaque = f"≤{limiar:.0%}"
+    sub = df.copy()
+    sub["cor"] = sub["faixa"].map(lambda f: "Oportunidade" if f == destaque else "Demais faixas")
+    fig = px.bar(
+        sub,
+        x="faixa",
+        y="mediana_dias",
+        color="cor",
+        color_discrete_map={"Oportunidade": "#2a9d8f", "Demais faixas": "#9aa5b1"},
+        text=sub.apply(lambda r: f"{r['mediana_dias']:.1f}d (n={int(r['anuncios'])})", axis=1),
+        labels={"faixa": "Preço vs mediana do grupo", "mediana_dias": "Mediana de dias no ar", "cor": ""},
+        title="Quanto tempo o anúncio fica no ar, por faixa de preço",
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_yaxes(rangemode="tozero")
+    return fig
+
+
+def grafico_dispersao_categorias(df: pd.DataFrame):
+    """Barras: dispersão de preço dentro do grupo (CV mediano) por categoria,
+    com o CV depois de refinar o grupo (monitor por polegadas) ao lado --
+    mostra que parte da 'dispersão' era grupo mal definido."""
+    if df.empty:
+        return None
+    longo = df.melt(
+        id_vars="categoria",
+        value_vars=["cv_mediano", "cv_refinado"],
+        var_name="medida",
+        value_name="cv",
+    ).dropna(subset=["cv"])
+    longo["medida"] = longo["medida"].map({"cv_mediano": "Grupo atual", "cv_refinado": "Grupo refinado (por polegadas)"})
+    fig = px.bar(
+        longo,
+        x="categoria",
+        y="cv",
+        color="medida",
+        barmode="group",
+        text=longo["cv"].map(lambda v: f"{v:.2f}"),
+        labels={"categoria": "", "cv": "Coeficiente de variação (mediana entre grupos)", "medida": ""},
+        title="Dispersão de preço dentro do grupo, por categoria",
+    )
+    fig.update_traces(textposition="outside")
+    return fig

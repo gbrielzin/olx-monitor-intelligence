@@ -1,8 +1,21 @@
 import pandas as pd
 import streamlit as st
 
-from charts import grafico_dispersao_hz, grafico_distribuicao_preco, grafico_tendencia_quedas
+from charts import (
+    grafico_dispersao_categorias,
+    grafico_dispersao_hz,
+    grafico_distribuicao_preco,
+    grafico_tempo_no_ar_por_faixa,
+    grafico_tendencia_quedas,
+)
 from common.config import settings
+from common.insights import (
+    cobertura_coleta,
+    conflitos_titulo_modelo,
+    dispersao_por_categoria,
+    resumo_quedas,
+    tempo_no_ar_por_faixa,
+)
 from common.stats import avaliar_preco, margem_e_confiavel, medianas_todos_grupos
 from queries import (
     carregar_ativos,
@@ -10,11 +23,24 @@ from queries import (
     carregar_novidades,
     carregar_quedas_precos,
     carregar_tempo_no_ar,
+    carregar_todos_anuncios,
+    carregar_ultima_coleta_por_categoria,
 )
 from vendas import carregar_vendas, marcar_como_vendido, registrar_compra
 
-st.set_page_config(page_title="iPhone — OLX multi-estado", layout="wide")
+st.set_page_config(page_title="OLX Monitor Intelligence", layout="wide")
 st.title("Inteligência de mercado (OLX)")
+
+
+def _regioes_txt() -> str:
+    """Nome das regiões de iPhone REALMENTE configuradas (`IPHONE_REGIOES`,
+    ou o ES padrão) -- o texto do dashboard descreve o que roda, não o que
+    o código suportaria."""
+    return ", ".join(r.nome for r in settings.iphone_regioes)
+
+
+def _data_br(ts: pd.Timestamp | None) -> str:
+    return ts.tz_convert("America/Sao_Paulo").strftime("%d/%m/%Y") if ts is not None else "—"
 
 
 def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
@@ -27,10 +53,10 @@ def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
     avaliacoes = [
         avaliar_preco(preco, medianas[(categoria, grupo)], categoria)
         if pd.notna(preco) and (categoria, grupo) in medianas
-           and margem_e_confiavel(condicao, titulo, preco, categoria)
+           and margem_e_confiavel(condicao, titulo, preco, categoria, modelo if pd.notna(modelo) else None)
         else None
-        for preco, categoria, grupo, condicao, titulo in zip(
-            df["preco"], df["categoria"], df["grupo"], df["condicao"], df["titulo"]
+        for preco, categoria, grupo, condicao, titulo, modelo in zip(
+            df["preco"], df["categoria"], df["grupo"], df["condicao"], df["titulo"], df["modelo"]
         )
     ]
     df["oportunidade"] = [a.eh_oportunidade if a else False for a in avaliacoes]
@@ -43,7 +69,7 @@ def _com_avaliacao(df: pd.DataFrame) -> pd.DataFrame:
 def _frescor_da_coleta(categoria: str | None, uf: str | None) -> tuple[str, str | None]:
     """(texto da última coleta, uptime dos últimos 7 dias em % ou None).
     Uptime só é calculado com uma categoria escolhida -- cada categoria tem
-    sua própria agenda (monitor/computador pararam de rodar em 12/09/2026,
+    sua própria agenda (monitor/computador pararam de rodar,
     ver docs/CASE_DATA_ANALYTICS.md), então misturar todas sob 'Todas' não tem
     uma frequência esperada única pra comparar contra."""
     coletas = carregar_coletas(dias=7, categoria=categoria, uf=uf)
@@ -293,17 +319,146 @@ def secao_auditoria(categoria: str | None, uf: str | None = None) -> None:
     )
 
 
+def secao_resumo() -> None:
+    """A história que os dados acumulados contam -- toda a numeração é
+    calculada ao vivo (nada digitado à mão), via `common/insights.py`."""
+    todos = carregar_todos_anuncios()
+    if todos.empty:
+        st.info("Ainda sem dados coletados.")
+        return
+    coletas = carregar_coletas(dias=3650)
+    cob = cobertura_coleta(coletas)
+    iphone = todos[todos["categoria"] == "iphone"]
+    quedas = resumo_quedas(carregar_quedas_precos(dias=3650, categoria="iphone"), len(iphone))
+    primeira = pd.to_datetime(coletas["coletado_em"]).min() if not coletas.empty else None
+
+    st.subheader(f"O que {len(todos):,} anúncios e {cob['dias_janela']} dias de coleta mostram".replace(",", "."))
+    st.caption(
+        f"Região coletada: {_regioes_txt()}. Janela: {_data_br(primeira)} até hoje. "
+        "Tudo calculado ao vivo a partir do banco."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Anúncios únicos", f"{len(todos):,}".replace(",", "."))
+    c2.metric("Rodadas de coleta", f"{cob['rodadas']:,}".replace(",", "."))
+    c3.metric("Dias com coleta", f"{cob['dias_com_coleta']} de {cob['dias_janela']}")
+    c4.metric("Quedas de preço reais (iPhone)", quedas["quedas"])
+
+    st.markdown("### 1. Dispersão alta não é oportunidade")
+    disp = dispersao_por_categoria(todos)
+    if not disp.empty:
+        fig = grafico_dispersao_categorias(disp)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        linhas = {r.categoria: r for r in disp.itertuples()}
+        ip, mon = linhas.get("iphone"), linhas.get("monitor")
+        if ip is not None and mon is not None:
+            refino = (
+                f"Só de separar o grupo por polegadas, o coeficiente de variação cai de "
+                f"**{mon.cv_mediano:.2f}** para **{mon.cv_refinado:.2f}** — sinal de que parte da "
+                "\"oportunidade\" pode ser grupo mal definido, não mercado ineficiente. "
+                if pd.notna(mon.cv_refinado) else ""
+            )
+            st.markdown(
+                f"Monitor tem **{mon.pct_abaixo_limiar:.0f}%** dos anúncios abaixo de "
+                f"{settings.oportunidade_limiar:.0%} da mediana do grupo; iPhone, **{ip.pct_abaixo_limiar:.0f}%**. "
+                "À primeira vista, monitor seria o melhor mercado — mas o grupo dele "
+                "(marca + tipo) mistura tamanhos e specs. "
+                f"{refino}"
+                f"O grupo do iPhone (modelo + armazenamento) é bem mais homogêneo "
+                f"(CV **{ip.cv_mediano:.2f}**), então um preço 25% abaixo da mediana ali é um sinal mais limpo."
+            )
+        rotulo_pct = f"% ≤{settings.oportunidade_limiar:.0%} da mediana"
+        st.dataframe(
+            disp.rename(columns={
+                "categoria": "Categoria", "anuncios": "Anúncios", "grupos": "Grupos",
+                "cv_mediano": "CV mediano", "cv_refinado": "CV refinado",
+                "pct_abaixo_limiar": rotulo_pct,
+            }),
+            hide_index=True, use_container_width=True,
+            column_config={
+                "CV mediano": st.column_config.NumberColumn(format="%.2f"),
+                "CV refinado": st.column_config.NumberColumn(format="%.2f"),
+                rotulo_pct: st.column_config.NumberColumn(format="%.1f%%"),
+            },
+        )
+
+    st.markdown(f"### 2. Anúncio abaixo de {settings.oportunidade_limiar:.0%} da mediana some mais rápido?")
+    faixas = tempo_no_ar_por_faixa(todos, "iphone")
+    if not faixas.empty:
+        fig = grafico_tempo_no_ar_por_faixa(faixas, settings.oportunidade_limiar)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        rotulo_op = f"≤{settings.oportunidade_limiar:.0%}"
+        destaque = faixas[faixas["faixa"] == rotulo_op]
+        demais = faixas[faixas["faixa"] != rotulo_op]
+        if not destaque.empty and destaque["anuncios"].iloc[0] > 0 and demais["anuncios"].sum() > 0:
+            d = float(destaque["mediana_dias"].iloc[0])
+            resto = float((demais["mediana_dias"] * demais["anuncios"]).sum() / demais["anuncios"].sum())
+            sentido = "menos" if d < resto else "mais"
+            st.markdown(
+                f"iPhones anunciados a ≤{settings.oportunidade_limiar:.0%} da mediana ficam **{d:.1f} dias** no ar "
+                f"(n={int(destaque['anuncios'].iloc[0])}), contra ~**{resto:.1f} dias** nas demais faixas — "
+                f"{sentido} tempo."
+            )
+        st.caption(
+            "Leitura descritiva, não causal: o scraper só sabe que o anúncio parou de aparecer "
+            "(venda e desanúncio se confundem), só entram anúncios que já saíram (viés de "
+            "sobrevivência), e a coleta irregular quantiza as durações."
+        )
+
+    st.markdown("### 3. Quanto o vendedor realmente cede?")
+    if quedas["mediana_pct"] is not None:
+        st.markdown(
+            f"Em **{quedas['anuncios_com_queda']}** anúncios de iPhone "
+            f"({quedas['pct_anuncios']:.0f}% do total) houve queda real de preço; a queda "
+            f"mediana foi de **{quedas['mediana_pct']:.1f}%**. O sistema assume "
+            f"**{settings.desconto_negociacao_esperado:.0%}** de negociação ao estimar a margem — "
+            "um parâmetro que estava só suposto e agora tem um número de mercado pra comparar."
+        )
+        st.caption("Queda no anúncio (o vendedor baixa o preço) não é o mesmo que desconto na conversa — é um proxy.")
+    else:
+        st.info("Ainda sem quedas de preço registradas.")
+
+    st.markdown("### 4. Qualidade do dado")
+    conflitos = conflitos_titulo_modelo(iphone)
+    total_ip = max(len(iphone), 1)
+    st.markdown(
+        f"**{len(conflitos)}** anúncios de iPhone ({len(conflitos) / total_ip:.1%}) têm um título que cita "
+        "uma geração diferente do campo `modelo` da OLX. Eles ficam **fora** da mediana e dos alertas — "
+        "sem isso, um anúncio de \"iPhone 18 Pro Max\" de R$ 13 mil entrava no grupo do 17 Pro Max e "
+        "puxava o preço de referência."
+    )
+    if not conflitos.empty:
+        with st.expander("Ver os anúncios excluídos"):
+            st.dataframe(
+                conflitos[["titulo", "modelo", "preco", "url"]], hide_index=True, use_container_width=True,
+                column_config={
+                    "titulo": "Título", "modelo": "Modelo (OLX)",
+                    "preco": st.column_config.NumberColumn("Preço", format="R$ %.0f"),
+                    "url": st.column_config.LinkColumn("Link", display_text="abrir"),
+                },
+            )
+
+    st.markdown("### Limitações")
+    st.markdown(
+        f"- **Cobertura:** coleta em {cob['dias_com_coleta']} de {cob['dias_janela']} dias — roda num PC "
+        "pessoal, não num servidor. Buracos de horas ou dias existem e estão na tabela `coletas`.\n"
+        "- **Uma região:** só o estado configurado é coletado; conclusões não se estendem a outros estados.\n"
+        "- **Descritivo:** nenhuma análise acima prova causa. O backtest formal (o alerta antecipou mesmo uma "
+        "queda de preço?) depende de mais histórico em `medianas_diarias`."
+    )
+
+
 def secao_sobre() -> None:
     st.markdown(
         rf"""
 Sistema de arbitragem informacional: monitora anúncios de **iPhone** na
-OLX, em múltiplos estados, a cada {settings.scrape_interval_minutes} min,
-calcula a mediana de mercado de cada grupo (modelo+armazenamento — separada
-por estado, um iPhone de SP não compete pela mesma mediana que um do ES),
-e avisa quando um anúncio aparece — ou baixa de preço — a
-**{settings.oportunidade_limiar:.0%} da mediana do grupo ou menos**. Cada
-estado pode ter seu próprio grupo do Telegram recebendo os alertas — a
-região pessoal do administrador fica só no chat pessoal.
+OLX, a cada {settings.scrape_interval_minutes} min, hoje em **{_regioes_txt()}**,
+calcula a mediana de mercado de cada grupo (modelo+armazenamento, separada
+por estado) e avisa quando um anúncio aparece — ou baixa de preço — a
+**{settings.oportunidade_limiar:.0%} da mediana do grupo ou menos**. O código
+suporta vários estados (variável `IPHONE_REGIOES`, cada um com seu grupo do
+Telegram), mas só as regiões acima são de fato coletadas.
 
 **A tese:** parte do mercado de usados é ineficiente — vendedor urgente ou
 desinformado anuncia abaixo do preço justo. Achar isso manualmente, na hora
@@ -398,17 +553,23 @@ def secao_vendas() -> None:
 categoria_label = st.radio(
     "Categoria", ["iPhone", "Monitor", "Computador", "Todas"], horizontal=True,
     help="iPhone é a única categoria ainda coletada -- Monitor e Computador "
-    "pararam de ser agendados em 12/09/2026 (mercado se mostrou ineficaz, "
-    "ver docs/CASE_DATA_ANALYTICS.md) e ficam com dado congelado: os anúncios "
-    "continuam marcados como ativos mesmo sem confirmação recente de que "
-    "ainda estão no ar, então oportunidade/margem ali não são confiáveis.",
+    "pararam de ser agendados (ver docs/CASE_DATA_ANALYTICS.md) e ficam com "
+    "dado congelado: os anúncios continuam marcados como ativos mesmo sem "
+    "confirmação recente de que ainda estão no ar, então oportunidade/margem "
+    "ali não são confiáveis. O aviso abaixo mostra a data da última coleta.",
 )
 categoria = {"iPhone": "iphone", "Monitor": "monitor", "Computador": "computador", "Todas": None}[categoria_label]
-if categoria in ("monitor", "computador") or categoria is None:
+_ultimas = carregar_ultima_coleta_por_categoria()
+_ultima_iphone = _ultimas.get("iphone")
+_congeladas = {
+    cat: ts for cat, ts in _ultimas.items()
+    if cat != "iphone" and _ultima_iphone is not None and (_ultima_iphone - ts).days >= 2
+}
+if categoria in _congeladas or (categoria is None and _congeladas):
+    _detalhe = ", ".join(f"{c} (última coleta {_data_br(t)})" for c, t in _congeladas.items())
     st.warning(
-        "⚠️ Monitor e Computador pararam de ser coletados em 12/09/2026 — "
-        "os anúncios dessas categorias ficam com o último estado visto antes "
-        "disso (não são re-checados), então margem/oportunidade aqui refletem "
+        f"⚠️ Categoria(s) sem coleta nova: {_detalhe}. Os anúncios ficam com o último "
+        "estado visto (não são re-checados), então margem/oportunidade aqui refletem "
         "dado congelado, não o mercado agora.",
         icon="⚠️",
     )
@@ -423,9 +584,11 @@ if categoria == "iphone" and len(ufs_iphone) > 1:
 
 secao_kpis(categoria, uf)
 
-tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas, tab_auditoria, tab_sobre = st.tabs(
-    ["🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas", "🩺 Auditoria", "ℹ️ Sobre o negócio"]
+tab_resumo, tab_oportunidades, tab_tendencia, tab_mercado, tab_vendas, tab_auditoria, tab_sobre = st.tabs(
+    ["📖 Resumo", "🔔 Oportunidades", "📈 Tendência de preço", "🗺️ Mercado", "💵 Vendas", "🩺 Auditoria", "ℹ️ Sobre o negócio"]
 )
+with tab_resumo:
+    secao_resumo()
 with tab_oportunidades:
     secao_alertas(categoria, uf)
 with tab_tendencia:

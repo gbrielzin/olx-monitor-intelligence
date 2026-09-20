@@ -112,3 +112,30 @@ def carregar_novidades(dias: int = 1, categoria: str | None = None, uf: str | No
     query += " ORDER BY a.primeiro_visto_em DESC"
     with get_connection() as conn:
         return pd.read_sql_query(query, conn, params=params)
+
+
+def carregar_todos_anuncios(categoria: str | None = None) -> pd.DataFrame:
+    """1 linha por anúncio JÁ VISTO (ativo ou não) -- base das análises
+    retrospectivas da aba Resumo (`common/insights.py`). Só as colunas que
+    elas usam, pra não trazer o `SELECT *` inteiro de milhares de linhas."""
+    query = (
+        "SELECT categoria, grupo, modelo, titulo, preco, condicao, polegadas, "
+        "ativo, primeiro_visto_em, removido_em, url FROM anuncios"
+    )
+    params: list = []
+    if categoria is not None:
+        query += " WHERE categoria = ?"
+        params.append(categoria)
+    with get_connection() as conn:
+        return pd.read_sql_query(query, conn, params=params)
+
+
+def carregar_ultima_coleta_por_categoria() -> dict[str, pd.Timestamp]:
+    """Data da última rodada gravada de cada categoria -- é daqui que o
+    dashboard sabe QUAL categoria ainda é coletada, em vez de ter a data de
+    descontinuação escrita à mão no texto (que fica errada sozinha)."""
+    with get_connection() as conn:
+        linhas = conn.execute(
+            "SELECT categoria, MAX(coletado_em) FROM coletas GROUP BY categoria"
+        ).fetchall()
+    return {cat: pd.to_datetime(ts) for cat, ts in linhas if ts}
