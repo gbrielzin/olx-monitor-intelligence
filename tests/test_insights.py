@@ -113,3 +113,28 @@ def test_maiores_buracos_devolve_os_maiores_intervalos():
     assert len(top) == 1 and top[0][1] == 48.0
     assert top[0][0] == pd.Timestamp("2026-09-01T01:00:00+00:00")
     assert maiores_buracos(pd.DataFrame({"coletado_em": ["2026-09-01T00:00:00+00:00"]})) == []
+
+
+def test_analise_descricoes_acha_termos_dos_falsos_e_o_que_a_regra_pegaria():
+    from common.insights import analise_descricoes
+
+    c = pd.DataFrame({
+        "veredito": ["falso", "falso", "real"],
+        "descricao": [
+            "Tela com manchas e face id ruim, resto ok",
+            "Não liga mais, vendo pra peça",
+            "Aparelho perfeito, bateria ótima",
+        ],
+    })
+    a = analise_descricoes(c)
+    assert a["com_descricao"] == 3
+    assert a["falsos_que_a_regra_pegaria"] == (1, 2)  # só "não liga" cai na rede atual; "manchas" escapa
+    termos = {t for t, _, _ in a["termos_falsos"]}
+    assert "manchas" in termos and "perfeito" not in termos
+
+
+def test_analise_descricoes_sem_descricao_devolve_vazio():
+    from common.insights import analise_descricoes
+
+    assert analise_descricoes(pd.DataFrame())["com_descricao"] == 0
+    assert analise_descricoes(pd.DataFrame({"veredito": ["real"], "descricao": [None]}))["com_descricao"] == 0

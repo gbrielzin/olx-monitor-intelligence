@@ -12,7 +12,10 @@ tenta esconder limitação: o que é descritivo não vira causal.
 import pandas as pd
 
 from common.config import settings
-from common.stats import margem_e_confiavel, titulo_conflita_com_modelo
+import re
+from collections import Counter
+
+from common.stats import _TITULO_DEFEITO_PATTERN, margem_e_confiavel, titulo_conflita_com_modelo
 
 FAIXAS_RAZAO = [0, 0.75, 0.90, 1.10, 1.25, float("inf")]
 ROTULOS_FAIXAS = ["≤75%", "75–90%", "90–110%", "110–125%", ">125%"]
@@ -152,6 +155,44 @@ def precisao_alertas(conferencias: pd.DataFrame) -> dict:
         "inconclusivos": int(contagem.get("inconclusivo", 0)),
         "precisao_pct": reais / decididos * 100 if decididos else None,
         "motivos": motivos.to_dict(),
+    }
+
+
+_STOPWORDS = frozenset(
+    "para com sem que uma uns umas dos das nos nas por mais muito como mas tem ter foi ser "
+    "está esta esse essa isso aqui vendo troco valor preço aparelho celular iphone apple "
+    "anos ano dias dia tudo todo toda sobre pois então você voce favor pra".split()
+)
+
+
+def _palavras(texto: str) -> list[str]:
+    return [p for p in re.findall(r"[a-zà-ú0-9]{4,}", texto.lower()) if p not in _STOPWORDS]
+
+
+def analise_descricoes(conferencias: pd.DataFrame, n: int = 10) -> dict:
+    """O que aparece na descrição dos anúncios conferidos, separado por
+    veredito. Serve pra melhorar a regra: `termos_falsos` são as palavras que
+    mais aparecem nos falsos alarmes MAS pouco nos reais (candidatas a regra
+    nova); `falsos_que_a_regra_pegaria` diz quantos falsos alarmes a rede
+    atual de defeito (`stats._TITULO_DEFEITO_PATTERN`) teria barrado SE lesse
+    a descrição -- hoje o scraper só lê o título."""
+    vazio = {"com_descricao": 0, "termos_falsos": [], "falsos_que_a_regra_pegaria": (0, 0)}
+    if conferencias.empty or "descricao" not in conferencias:
+        return vazio
+    d = conferencias[conferencias["descricao"].fillna("").str.strip() != ""]
+    if d.empty:
+        return vazio
+    falsos, reais = d[d["veredito"] == "falso"], d[d["veredito"] == "real"]
+    cont_f = Counter(p for t in falsos["descricao"] for p in set(_palavras(t)))
+    cont_r = Counter(p for t in reais["descricao"] for p in set(_palavras(t)))
+    termos = [
+        (p, c, cont_r.get(p, 0)) for p, c in cont_f.most_common() if c > cont_r.get(p, 0)
+    ][:n]
+    pegaria = sum(bool(_TITULO_DEFEITO_PATTERN.search(t)) for t in falsos["descricao"])
+    return {
+        "com_descricao": len(d),
+        "termos_falsos": termos,  # (termo, nº de falsos, nº de reais)
+        "falsos_que_a_regra_pegaria": (pegaria, len(falsos)),
     }
 
 

@@ -47,3 +47,23 @@ def test_exportar_para_pasta_grava_csv_legivel_no_excel(tmp_path):
     }
     bruto = (tmp_path / "out" / "fato_coletas.csv").read_bytes()
     assert bruto.startswith(b"\xef\xbb\xbf")  # BOM: Excel em português abre sem configurar
+
+
+def test_conferencia_guarda_descricao_e_migra_tabela_antiga(tmp_path):
+    import sqlite3
+
+    storage = _storage(tmp_path, "c4.db")
+    # simula a versão anterior: tabela sem a coluna `descricao`
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute("DROP TABLE conferencias")
+        conn.execute(
+            "CREATE TABLE conferencias (id INTEGER PRIMARY KEY AUTOINCREMENT, listing_id INTEGER NOT NULL, "
+            "plataforma TEXT NOT NULL DEFAULT 'olx', titulo TEXT, preco REAL, mediana_grupo REAL, "
+            "margem_pct REAL, veredito TEXT NOT NULL, motivo TEXT, conferido_em TEXT NOT NULL)"
+        )
+    from dashboard import conferencias
+
+    importlib.reload(conferencias)
+    conferencias.registrar_conferencia(1, "falso", motivo="iCloud / bloqueio", descricao="  preso no icloud  ")
+    df = conferencias.carregar_conferencias()
+    assert df.iloc[0]["descricao"] == "preso no icloud"

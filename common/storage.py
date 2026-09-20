@@ -177,10 +177,21 @@ CREATE TABLE IF NOT EXISTS conferencias (
     margem_pct REAL,
     veredito TEXT NOT NULL,
     motivo TEXT,
-    conferido_em TEXT NOT NULL
+    conferido_em TEXT NOT NULL,
+    descricao TEXT
 );
 """
 _SCHEMA += DDL_CONFERENCIAS
+
+
+def garantir_conferencias(conn: sqlite3.Connection) -> None:
+    """Cria a tabela e, se ela já existia sem `descricao` (versão anterior),
+    acrescenta a coluna -- o dashboard não roda init_db, então a migração
+    precisa poder ser chamada de fora."""
+    conn.executescript(DDL_CONFERENCIAS)
+    colunas = {r[1] for r in conn.execute("PRAGMA table_info(conferencias)")}
+    if "descricao" not in colunas:
+        conn.execute("ALTER TABLE conferencias ADD COLUMN descricao TEXT")
 
 _COLUNAS_ANUNCIO = (
     "listing_id, plataforma, categoria, grupo, titulo, preco, preco_antigo, url, data_publicacao, "

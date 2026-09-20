@@ -11,6 +11,7 @@ from charts import (
 from common.config import settings
 from common.export import para_csv_bytes, tabelas_para_bi
 from common.insights import (
+    analise_descricoes,
     cobertura_coleta,
     conflitos_titulo_modelo,
     dispersao_por_categoria,
@@ -208,11 +209,18 @@ def _form_conferencia(oportunidades: pd.DataFrame) -> None:
         motivo = None
         if veredito == "falso":
             motivo = st.selectbox("Por que falhou", MOTIVOS_FALSO, key="conf_motivo")
+        descricao = st.text_area(
+            "O que aparece na descrição do anúncio (copie e cole)",
+            key="conf_descricao",
+            help="É a matéria-prima pra melhorar a regra: o scraper só lê o título, "
+            "e é na descrição que costuma estar o defeito, o bloqueio, a bateria.",
+        )
         if st.button("Registrar conferência"):
             r = opcoes[escolha]
             registrar_conferencia(
                 int(r.listing_id), veredito, titulo=r.titulo, preco=float(r.preco),
                 mediana_grupo=float(r.mediana_grupo), margem_pct=float(r.margem_pct), motivo=motivo,
+                descricao=descricao,
             )
             st.success("Conferência registrada — entra na precisão dos alertas (aba Resumo).")
 
@@ -505,6 +513,21 @@ def secao_resumo() -> None:
             st.caption("Por que os falsos alarmes falharam: " + "; ".join(f"{m} ({n})" for m, n in prec["motivos"].items()))
         if prec["conferidos"] < 20:
             st.caption("Amostra pequena (<20): trate como indicativo, não como taxa.")
+        desc = analise_descricoes(carregar_conferencias())
+        if desc["com_descricao"]:
+            pegaria, total_f = desc["falsos_que_a_regra_pegaria"]
+            with st.expander(f"O que as descrições dizem ({desc['com_descricao']} coladas)"):
+                if total_f:
+                    st.markdown(
+                        f"A regra atual de defeito teria barrado **{pegaria} de {total_f}** falsos alarmes "
+                        "se lesse a descrição (hoje só lê o título)."
+                    )
+                if desc["termos_falsos"]:
+                    st.markdown("Palavras mais comuns nos falsos alarmes e raras nos reais (candidatas a regra):")
+                    st.dataframe(
+                        pd.DataFrame(desc["termos_falsos"], columns=["Termo", "Nos falsos", "Nos reais"]),
+                        hide_index=True, use_container_width=True,
+                    )
 
     st.markdown("### Limitações")
     buracos_txt = "; ".join(

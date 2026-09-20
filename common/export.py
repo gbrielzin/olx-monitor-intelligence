@@ -12,12 +12,12 @@ from pathlib import Path
 import pandas as pd
 
 from common.insights import com_razao_mediana
-from common.storage import DDL_CONFERENCIAS, get_connection
+from common.storage import garantir_conferencias, get_connection
 
 
 def tabelas_para_bi() -> dict[str, pd.DataFrame]:
     with get_connection() as conn:
-        conn.executescript(DDL_CONFERENCIAS)
+        garantir_conferencias(conn)
         anuncios = pd.read_sql_query("SELECT * FROM anuncios", conn)
         tabelas = {
             "fato_historico_precos": pd.read_sql_query("SELECT * FROM historico_precos", conn),
