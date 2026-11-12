@@ -90,11 +90,72 @@ não têm wheel pronta pra versões de Python muito mais novas, então
 instalada. Isso não afeta produção (que sempre usa 3.11 via Docker), só
 quem rodar os testes fora do container numa versão de Python diferente.
 
+Os testes do pipeline novo (`tests/test_flow_prefect.py`, `tests/test_armazenamento_s3.py`)
+são pulados sozinhos se o Prefect/boto3/moto não estiverem instalados; pra rodar
+tudo, use o ambiente de `requirements-pipeline.txt` (seção abaixo).
+
+## Pipeline (Prefect) e camadas
+
+Além do caminho de sempre (`docker-compose up`, APScheduler), tem um segundo jeito
+de rodar a mesma coleta: um flow do Prefect que também guarda o dado em camadas.
+Decisões e trade-offs em
+[`docs/ADR_001_pipeline_prefect_camadas.md`](docs/ADR_001_pipeline_prefect_camadas.md).
+
+```
+coletar ──► sanidade ──► diff ──► salvar bronze ──► transformar ──► alertar
+(retry só       │        (banco        (JSON bruto)    (prata + ouro
+ em erro de     │         do dashboard)                 + CSV pra BI)
+ rede)          └─ reprovou: bruto vai pra quarentena/, nada é gravado
+```
+
+| Camada | O que guarda | Onde |
+|---|---|---|
+| Bronze | JSON bruto de cada coleta, como veio da OLX | `bronze/olx/iphone/uf=ES/data=.../coleta_*.json` |
+| Prata | anúncio limpo, validado, sem duplicata e sem dado do vendedor | `prata/...` (JSON Lines) |
+| Ouro | modelo estrela: `fato_anuncio_snapshot` + `dim_modelo`, `dim_local`, `dim_data` | `OURO_DB_PATH` (SQLite) + `ouro/*.csv` |
+
+O lake grava numa pasta local por padrão (`LAKE_DIR`). Com `LAKE_BACKEND=s3`, grava
+num bucket S3 via boto3 — MinIO local (`LAKE_S3_ENDPOINT_URL=http://localhost:9000`)
+ou AWS, sem mudar código. Nenhuma credencial fica no repositório: tudo vem do `.env`.
+
+**Rodar local (sem Prefect Cloud, sem conta):**
+
+```bash
+python -m venv .venv-pipeline
+.venv-pipeline/Scripts/pip install -r requirements-pipeline.txt   # Linux/macOS: .venv-pipeline/bin/pip
+
+# uma rodada (o Prefect sobe um servidor temporário sozinho)
+PYTHONPATH=. LAKE_DIR=data/lake OURO_DB_PATH=data/ouro.db DB_PATH=data/olx_monitor.db \
+  .venv-pipeline/Scripts/python flows/pipeline_olx.py
+
+# agendado a cada SCRAPE_INTERVAL_MINUTES, com UI em http://127.0.0.1:4200
+.venv-pipeline/Scripts/prefect server start                       # terminal 1
+.venv-pipeline/Scripts/prefect config set PREFECT_API_URL=http://127.0.0.1:4200/api
+PYTHONPATH=. .venv-pipeline/Scripts/python flows/pipeline_olx.py --agendar   # terminal 2
+
+# consultas da ouro (LAG, ROW_NUMBER, mediana móvel de 7 dias)
+PYTHONPATH=. OURO_DB_PATH=data/ouro.db python -m pipeline.consultas_ouro
+```
+
+MinIO é opcional e só sobe com o perfil: `docker-compose --profile lake up -d minio`
+(preencha `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` no `.env` e confira a imagem — ver
+o comentário no `docker-compose.yml`).
+
+> Não rode o flow e o `docker-compose` do scraper ao mesmo tempo contra o mesmo
+> banco: seriam duas coletas por intervalo, e a detecção de "anúncio sumiu" e o
+> checkpoint de sanidade veriam rodadas em dobro.
+
+Pra uma entrevista, separei as perguntas que eu esperaria sobre essa parte (e as
+respostas com base no código) em
+[`docs/perguntas_entrevista.md`](docs/perguntas_entrevista.md).
+
 ## Arquitetura
 
 ```
 common/      -- config, schema (Pydantic) e storage (SQLite), compartilhados
 scraper/     -- coleta: fetch -> parse -> sanidade -> diff -> save -> alerta
+flows/       -- o mesmo pipeline orquestrado pelo Prefect (opcional)
+pipeline/    -- camadas bronze/prata/ouro, armazenamento local/S3, SQL da ouro
 dashboard/   -- Streamlit, só leitura do mesmo banco
 data/        -- banco SQLite (gitignored, criado em runtime)
 ```

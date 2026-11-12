@@ -10,6 +10,46 @@ Convenção: entrada mais recente no topo; toda afirmação numérica tem data.
 
 ---
 
+## 12/11/2026 — pipeline com Prefect, camadas e modelo estrela
+
+### Scraper ainda funciona?
+Coleta de teste em 12/11/2026, ~08:17 UTC, só ES, só a página 1, banco SQLite
+temporário (fora de `data/`), Telegram desligado. A primeira requisição voltou
+**403**; a seguinte, segundos depois, **200**. Na rodada que passou: 57 itens no
+array `ads`, **50 anúncios** (os outros 7 eram propaganda), 50 com preço,
+checkpoint de sanidade ok. O parser não precisou de ajuste.
+
+### O que foi feito
+- `flows/pipeline_olx.py`: flow do Prefect (coletar → sanidade → diff → bronze →
+  transformar → alertar), retry só em erro de rede, quarentena quando a sanidade
+  reprova, aviso no Telegram pessoal quando o flow falha.
+- `pipeline/`: armazenamento local/S3 (boto3 + `endpoint_url`), camadas
+  bronze/prata, ouro em modelo estrela (`fato_anuncio_snapshot` + 3 dimensões) e 3
+  consultas com window function.
+- `scraper/coleta.py` e `scraper/alertas.py`: saíram de dentro do `main.py` pra o
+  flow reaproveitar; o caminho antigo usa os mesmos módulos.
+- **Bug corrigido:** quebra de parser (`ValueError` do `extract_ads`) escapava da
+  rodada sem o aviso "possivelmente quebrado" no Telegram — o `except` estava em
+  volta do `build_ads`, que não levanta esse erro.
+- MinIO opcional no `docker-compose.yml` (perfil `lake`).
+- Decisões em [`ADR_001_pipeline_prefect_camadas.md`](ADR_001_pipeline_prefect_camadas.md);
+  perguntas de entrevista em [`perguntas_entrevista.md`](perguntas_entrevista.md).
+
+### Testes
+Antes: 160 passando. Depois: 204 passando no ambiente com Prefect 3.9.2 + boto3 +
+moto; 197 passando e 2 módulos pulados (Prefect/boto3 ausentes) no Python do
+sistema. Tudo em Python 3.14.7 — não testei em 3.11.
+
+### AINDA FALTA
+1. Subir o MinIO (Docker estava parado; conferir a imagem, a oficial `minio/minio`
+   não aparecia no Docker Hub em 12/11/2026) e rodar o flow com `LAKE_BACKEND=s3`.
+2. Testar o modo agendado (`--agendar` + `prefect server start`).
+3. Decidir se o Prefect substitui o APScheduler no Docker.
+4. Rodar a suíte em Python 3.11.
+5. DDL Postgres da ouro: escrito, não executado.
+
+---
+
 ## 20/09/2026 — de "dado que funciona" pra "história que se conta"
 
 ### Ponto de partida
