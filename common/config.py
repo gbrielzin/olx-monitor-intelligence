@@ -154,6 +154,26 @@ class Settings(BaseSettings):
     # --- Banco de dados ---
     db_path: str = "/data/olx_monitor.db"
 
+    # --- Pipeline em camadas (flows/pipeline_olx.py) -- opcional ---
+    # Só o flow do Prefect usa estes campos; o scraper antigo (scraper/main.py
+    # via docker-compose) não lê nenhum deles. Ver docs/ADR_001_pipeline_prefect_camadas.md.
+    # "local" grava bronze/prata/ouro numa pasta (lake_dir); "s3" grava num
+    # bucket compatível com S3 (MinIO local ou AWS de verdade).
+    lake_backend: str = "local"
+    lake_dir: str = "/data/lake"
+    lake_s3_bucket: str = "olx-lake"
+    # Vazio = endpoint padrão da AWS. Pra MinIO local: http://localhost:9000
+    lake_s3_endpoint_url: str = ""
+    lake_s3_regiao: str = "us-east-1"
+    # Vazias = boto3 procura credencial no ambiente/perfil (cadeia padrão).
+    # Nunca colocar chave real em arquivo versionado -- só no .env.
+    lake_s3_access_key: str = ""
+    lake_s3_secret_key: str = ""
+    # Banco da camada ouro (modelo fato/dimensão), separado do banco
+    # operacional pra reconstruir do zero a partir da prata sem tocar no
+    # que o scraper e o dashboard usam.
+    ouro_db_path: str = "/data/ouro.db"
+
     @model_validator(mode="after")
     def _default_iphone_regiao_pessoal(self) -> "Settings":
         """Sem IPHONE_REGIOES no .env, roda só a região pessoal (ES) no
