@@ -20,3 +20,26 @@ services:
     depends_on:
       - scraper
     restart: unless-stopped
+
+  # Opcional: armazenamento compatível com S3 pro pipeline em camadas
+  # (flows/pipeline_olx.py). Só sobe com o perfil -- `docker-compose up`
+  # sozinho continua subindo só scraper + dashboard, como antes:
+  #   docker-compose --profile lake up -d minio
+  # Console web em http://localhost:9001 (MINIO_ROOT_USER/MINIO_ROOT_PASSWORD
+  # do .env -- preencha antes de subir; sem eles o MinIO não inicia direito).
+  # Imagem configurável (MINIO_IMAGE no .env): em 12/11/2026 a imagem
+  # oficial minio/minio não aparecia mais no Docker Hub, e eu não consegui
+  # testar esta parte (Docker parado). Confira a imagem antes de subir.
+  minio:
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:latest}
+    profiles: ["lake"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    volumes:
+      - ./data/minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    restart: unless-stopped

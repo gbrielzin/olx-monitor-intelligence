@@ -36,3 +36,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Ambiente separado do pipeline com Prefect (requirements-pipeline.txt)
+.venv-pipeline/
