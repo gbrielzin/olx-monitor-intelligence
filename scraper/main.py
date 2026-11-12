@@ -27,75 +27,21 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from auditoria_ia import auditar_anuncio
+from alertas import _linha_extra, _linhas_margem, _msg_novo, _msg_queda, disparar_alertas  # noqa: F401
+from coleta import coletar_paginas
 from common.config import settings
 from common.schema import ComputadorAd, IphoneAd, MonitorAd
-from common.storage import contagem_media_ultimas_coletas, eh_minimo_historico, init_db, upsert_ads
+from common.storage import contagem_media_ultimas_coletas, init_db, upsert_ads
 from diff import separar_novidades
-from fetcher import FetchError, fetch_html, url_pagina
+from fetcher import FetchError
 from notifier import enviar_telegram
-from parser import build_ads, extract_ads
+from parser import build_ads
 from resumo_diario import enviar_resumo_diario
 from sanity import checar_sanidade
-from common.stats import Avaliacao, avaliar, grava_snapshot_diario
+from common.stats import grava_snapshot_diario
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("scraper")
-
-
-def _linha_extra(ad) -> str:
-    """Detalhe específico de categoria que muda a decisão de compra mas
-    não é forte o bastante pra excluir o anúncio da mediana como 'com
-    defeito' -- é informação, não veto. getattr defensivo porque cada
-    campo só existe numa categoria por vez."""
-    saude = getattr(ad, "saude_bateria", None)
-    if saude:
-        return f"\nBateria: {saude}"
-    if getattr(ad, "inclui_monitor", False):
-        return "\n🖥️ Inclui monitor (marca/tamanho não informados — confira no anúncio)"
-    return ""
-
-
-def _linhas_margem(av: Avaliacao) -> str:
-    """Margem em três leituras, não uma: sobre o custo (a mais alta), sobre
-    a venda e num cenário conservador (revende abaixo da mediana pedida).
-    Margem acima de `margem_suspeita` vem marcada -- preço muito baixo
-    costuma ser defeito escondido, não pechincha."""
-    texto = (
-        f"Margem estimada: R$ {av.margem_rs:.0f} ({av.margem_pct:.0%} sobre o custo · "
-        f"{av.margem_sobre_venda_pct:.0%} sobre a venda)\n"
-        f"Cenário conservador (revenda -{settings.desconto_revenda_esperado:.0%}): "
-        f"R$ {av.margem_conservadora_rs:.0f}\n"
-    )
-    if av.suspeita:
-        texto += "⚠️ Margem alta demais pra ser normal — confira descrição, bateria e bloqueio antes de ir\n"
-    return texto
-
-
-def _msg_novo(ad, av: Avaliacao) -> str:
-    return (
-        f"💰 Oportunidade (novo anúncio) — {ad.titulo}\n"
-        f"Anunciado: R$ {av.preco:.0f} — {ad.municipio or '?'} — {ad.condicao or 'condição não informada'}"
-        f"{_linha_extra(ad)}\n"
-        f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
-        f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
-        f"{_linhas_margem(av)}"
-        f"{ad.url}"
-    )
-
-
-def _msg_queda(ad, av: Avaliacao, preco_anterior: float, novo_minimo: bool) -> str:
-    estrela = " 🔻 mínimo histórico" if novo_minimo else ""
-    return (
-        f"📉 Baixou de preço e virou oportunidade — {ad.titulo}\n"
-        f"R$ {preco_anterior:.0f} → R$ {av.preco:.0f}{estrela} — {ad.municipio or '?'} — "
-        f"{ad.condicao or 'condição não informada'}"
-        f"{_linha_extra(ad)}\n"
-        f"Após negociar (~{settings.desconto_negociacao_esperado:.0%}): "
-        f"R$ {av.custo_apos_negociacao:.0f} · mediana do grupo: R$ {av.mediana:.0f}\n"
-        f"{_linhas_margem(av)}"
-        f"{ad.url}"
-    )
 
 
 def rodar_coleta(
@@ -112,31 +58,25 @@ def rodar_coleta(
     grupo público."""
     logger.info("Iniciando coleta (%s)...", nome)
 
-    raw_items: list[dict] = []
     try:
-        for pagina in range(1, settings.max_paginas + 1):
-            if pagina > 1:
-                time.sleep(1)  # teto subiu (5->10 paginas); intervalo curto entre elas
-            html = fetch_html(url_pagina(search_url, pagina))
-            pagina_raw = extract_ads(html)
-            reais = [i for i in pagina_raw if "listId" in i]
-            raw_items.extend(pagina_raw)
-            if len(reais) < 50:
-                break  # última página de resultado real
+        raw_items, _ = coletar_paginas(search_url, settings.max_paginas)
     except FetchError as e:
         logger.error(str(e))
         enviar_telegram(f"⚠️ Scraper ({nome}): falha ao buscar a página da OLX.\n{e}")
         return
-
-    try:
-        ads = build_ads(raw_items, ad_class)
     except ValueError as e:
+        # extract_ads levanta ValueError quando o JSON de anúncios some do
+        # HTML. Antes, este except ficava em volta de build_ads -- que nunca
+        # levanta ValueError (engole erro anúncio a anúncio) --, então a
+        # quebra de parser escapava da rodada sem o aviso no Telegram.
         logger.error(str(e))
         enviar_telegram(
             f"⚠️ Scraper ({nome}) possivelmente quebrado: não encontrei o JSON de "
             f"anúncios no HTML. A OLX pode ter mudado o front-end.\nDetalhe: {e}"
         )
         return
+
+    ads = build_ads(raw_items, ad_class)
 
     media_historica = contagem_media_ultimas_coletas(categoria=categoria, uf=uf)
     sanidade = checar_sanidade(ads, media_historica)
@@ -166,25 +106,7 @@ def rodar_coleta(
         # não pode quebrar o que já funcionava antes dela existir.
         logger.warning("Falha ao gravar snapshot diário (%s): %s", nome, e)
 
-    for ad in novos:
-        try:
-            auditar_anuncio(ad)
-        except Exception as e:
-            # Mesmo espírito do try/except em volta de grava_snapshot_diario
-            # acima: uma camada a mais (e paga, chamando API externa) não
-            # pode derrubar a rodada nem os alertas de oportunidade abaixo.
-            logger.warning("Falha ao auditar anúncio %s via IA (%s): %s", ad.listing_id, nome, e)
-
-        av = avaliar(ad.preco, ad.categoria, ad.grupo, ad.condicao, ad.titulo, getattr(ad, "modelo", None))
-        if av and av.eh_oportunidade:
-            enviar_telegram(_msg_novo(ad, av), chat_id=chat_id_oportunidade)
-
-    for ad in quedas:
-        av = avaliar(ad.preco, ad.categoria, ad.grupo, ad.condicao, ad.titulo, getattr(ad, "modelo", None))
-        if av and av.eh_oportunidade:
-            _, preco_anterior = resultado.quedas[ad.listing_id]
-            novo_minimo = eh_minimo_historico(ad.listing_id, ad.preco)
-            enviar_telegram(_msg_queda(ad, av, preco_anterior, novo_minimo), chat_id=chat_id_oportunidade)
+    disparar_alertas(novos, quedas, resultado, nome=nome, chat_id_oportunidade=chat_id_oportunidade)
 
 
 def rodar_coleta_monitor() -> None:
