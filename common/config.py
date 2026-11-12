@@ -62,7 +62,13 @@ class Settings(BaseSettings):
     # scraper deliberadamente discreto, não maximiza cobertura simultânea.
     intervalo_entre_regioes_segundos: float = 2.0
 
-    scrape_interval_minutes: int = 12
+    # Era 12 desde ago/2026. Em 12/11/2026 a OLX (Cloudflare) passou a
+    # responder 403 nesse ritmo -- subi pra 30 pra ficar dentro do que o
+    # site aceita, em vez de tentar driblar o bloqueio.
+    scrape_interval_minutes: int = 30
+    # Depois de um 403/429 (bloqueio/limite), não insiste nas rodadas
+    # seguintes: espera essa pausa inteira antes de tentar de novo.
+    pausa_apos_bloqueio_minutos: int = 180
     # 10 = até 500 anúncios/categoria/rodada. Era 5 (250) -- o banco mostrava
     # a MESMA contagem exata (250) em toda rodada nas 3 categorias, sinal de
     # que o teto estava cortando antes do loop achar uma página curta de

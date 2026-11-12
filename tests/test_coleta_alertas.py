@@ -60,7 +60,7 @@ def test_rodar_coleta_avisa_falha_de_rede(monkeypatch):
     from fetcher import FetchError
 
     avisos = []
-    monkeypatch.setattr(main, "coletar_paginas", lambda *a, **k: (_ for _ in ()).throw(FetchError("403")))
+    monkeypatch.setattr(main, "coletar_paginas", lambda *a, **k: (_ for _ in ()).throw(FetchError("Read timed out")))
     monkeypatch.setattr(main, "enviar_telegram", lambda msg, chat_id=None: avisos.append(msg))
 
     main.rodar_coleta(nome="iPhone (ES)", search_url="u", ad_class=None, categoria="iphone", uf="ES")

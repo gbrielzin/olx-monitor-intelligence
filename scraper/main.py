@@ -43,6 +43,18 @@ from common.stats import grava_snapshot_diario
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("scraper")
 
+# Região (nome da rodada) -> instante (time.monotonic) até quando fica pausada
+# depois de tomar bloqueio. Em memória: se o container reiniciar, tenta de novo
+# uma vez e, se ainda estiver bloqueado, volta a pausar.
+_pausado_ate: dict[str, float] = {}
+
+
+def _foi_bloqueio(erro: Exception) -> bool:
+    """403 (Cloudflare/WAF) ou 429 (rate limit) = o site está pedindo pra
+    parar. Erro de rede comum (timeout, 5xx) não conta."""
+    texto = str(erro)
+    return "403" in texto or "429" in texto
+
 
 def rodar_coleta(
     *, nome: str, search_url: str, ad_class, categoria: str, uf: str,
@@ -56,13 +68,25 @@ def rodar_coleta(
     oportunidade (novo anúncio/queda de preço) -- erro/sanidade sempre vai
     pro chat pessoal (enviar_telegram sem chat_id explícito), nunca pra um
     grupo público."""
+    agora = time.monotonic()
+    if _pausado_ate.get(nome, 0) > agora:
+        logger.info("Coleta (%s) pausada por bloqueio; faltam %d min.", nome, int((_pausado_ate[nome] - agora) / 60))
+        return
+
     logger.info("Iniciando coleta (%s)...", nome)
 
     try:
         raw_items, _ = coletar_paginas(search_url, settings.max_paginas)
     except FetchError as e:
         logger.error(str(e))
-        enviar_telegram(f"⚠️ Scraper ({nome}): falha ao buscar a página da OLX.\n{e}")
+        if _foi_bloqueio(e):
+            _pausado_ate[nome] = agora + settings.pausa_apos_bloqueio_minutos * 60
+            enviar_telegram(
+                f"⏸️ Scraper ({nome}): a OLX bloqueou a coleta ({e}). "
+                f"Pausando {settings.pausa_apos_bloqueio_minutos} min antes de tentar de novo."
+            )
+        else:
+            enviar_telegram(f"⚠️ Scraper ({nome}): falha ao buscar a página da OLX.\n{e}")
         return
     except ValueError as e:
         # extract_ads levanta ValueError quando o JSON de anúncios some do
